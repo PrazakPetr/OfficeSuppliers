@@ -1,0 +1,1019 @@
+From 761e673937384ce76f10749174542ba4dbaa650e Mon Sep 17 00:00:00 2001
+From: Petr <prazak.p@centrum.cz>
+Date: Wed, 6 Nov 2019 23:23:53 +0100
+Subject: [PATCH] Use Newtonsoft JSON for ProxySystem
+
+---
+ Src/CentralSystem.Common/Contracts/House.cs   |  1 +
+ .../Contracts/HouseUpdate.cs                  |  4 +-
+ Src/CentralSystem.Common/Contracts/Room.cs    |  1 +
+ .../Contracts/RoomUpdate.cs                   |  1 +
+ .../Contracts/UnitUpdate.cs                   |  1 +
+ .../JsonPropertyNameAttribute.cs              |  9 +-
+ .../PePr.Zbyny.Common.csproj                  |  8 +-
+ .../PePr.Zbyny.CentralSystem.csproj           |  9 +-
+ Src/CentralSystem/Startup.cs                  | 86 +++++++++----------
+ Src/CommandProxy/Contracts/OperationalMode.cs | 22 +++++
+ .../Contracts/Requests/DeviceCode.cs          |  6 +-
+ .../Contracts/Requests/DeviceEditRequest.cs   | 40 ++++-----
+ .../Contracts/Requests/QueryPushItem.cs       | 10 +--
+ .../Contracts/Requests/QueryPushRequest.cs    |  6 +-
+ .../Contracts/Requests/RequestBase.cs         |  6 +-
+ .../Requests/SmarthomeEditRequest.cs          | 20 ++---
+ .../Requests/SmarthomeEditmodeRequest.cs      |  8 +-
+ .../Requests/SmarthomeTwinRequest.cs          |  3 +-
+ .../Contracts/Requests/StatsInsertRequest.cs  |  4 +-
+ .../Contracts/Requests/ZoneEditallItem.cs     |  6 +-
+ .../Contracts/Requests/ZoneEditallRequest.cs  |  4 +-
+ .../Contracts/Responses/ResponseBase.cs       |  6 +-
+ .../Contracts/Responses/ResponseDataBase.cs   |  4 +-
+ Src/CommandProxy/Entities/OperationMode.cs    | 34 ++++++++
+ .../Entities/ProgramTemperatureSet.cs         | 16 ++++
+ Src/CommandProxy/Entities/Room.cs             | 52 +++++++++++
+ Src/CommandProxy/Helpers/Serializer.cs        |  7 +-
+ .../PePr.Zbyny.ProxySystem.csproj             | 10 +--
+ Src/CommandProxy/Services/IStorage.cs         | 15 ++++
+ Src/CommandProxy/Services/RequestProcessor.cs | 12 +++
+ Src/CommandProxy/Startup.cs                   |  7 +-
+ Src/CommandProxy/appsettings.Development.json |  9 +-
+ Src/CommandProxy/appsettings.json             | 10 ++-
+ 33 files changed, 312 insertions(+), 125 deletions(-)
+ create mode 100644 Src/CommandProxy/Contracts/OperationalMode.cs
+ create mode 100644 Src/CommandProxy/Entities/OperationMode.cs
+ create mode 100644 Src/CommandProxy/Entities/ProgramTemperatureSet.cs
+ create mode 100644 Src/CommandProxy/Entities/Room.cs
+ create mode 100644 Src/CommandProxy/Services/IStorage.cs
+
+diff --git a/Src/CentralSystem.Common/Contracts/House.cs b/Src/CentralSystem.Common/Contracts/House.cs
+index 3b4cccf..e94b967 100644
+--- a/Src/CentralSystem.Common/Contracts/House.cs
++++ b/Src/CentralSystem.Common/Contracts/House.cs
+@@ -1,6 +1,7 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Linq;
++using System.Text.Json.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.Common.Contracts
+diff --git a/Src/CentralSystem.Common/Contracts/HouseUpdate.cs b/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
+index d84c148..b8ec1df 100644
+--- a/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
+@@ -1,4 +1,6 @@
+-﻿namespace PePr.Zbyny.Common.Contracts
++﻿using System.Text.Json.Serialization;
++
++namespace PePr.Zbyny.Common.Contracts
+ {
+     public class HouseUpdate
+     {
+diff --git a/Src/CentralSystem.Common/Contracts/Room.cs b/Src/CentralSystem.Common/Contracts/Room.cs
+index d67fa57..7e2a1c4 100644
+--- a/Src/CentralSystem.Common/Contracts/Room.cs
++++ b/Src/CentralSystem.Common/Contracts/Room.cs
+@@ -1,6 +1,7 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Text;
++using System.Text.Json.Serialization;
+ 
+ namespace PePr.Zbyny.Common.Contracts
+ {
+diff --git a/Src/CentralSystem.Common/Contracts/RoomUpdate.cs b/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
+index 0408922..0f7c8f3 100644
+--- a/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
+@@ -1,6 +1,7 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Text;
++using System.Text.Json.Serialization;
+ 
+ namespace PePr.Zbyny.Common.Contracts
+ {
+diff --git a/Src/CentralSystem.Common/Contracts/UnitUpdate.cs b/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
+index 3ac9c6d..6815346 100644
+--- a/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
+@@ -1,6 +1,7 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Text;
++using System.Text.Json.Serialization;
+ 
+ namespace PePr.Zbyny.Common.Contracts
+ {
+diff --git a/Src/CentralSystem.Common/JsonPropertyNameAttribute.cs b/Src/CentralSystem.Common/JsonPropertyNameAttribute.cs
+index 2b0ea7a..9b6e233 100644
+--- a/Src/CentralSystem.Common/JsonPropertyNameAttribute.cs
++++ b/Src/CentralSystem.Common/JsonPropertyNameAttribute.cs
+@@ -1,4 +1,7 @@
+-﻿using System;
++﻿#if NET30
++
++#else
++using System;
+ 
+ namespace PePr.Zbyny.Common
+ {
+@@ -8,4 +11,6 @@ namespace PePr.Zbyny.Common
+         {
+         }
+     }
+-}
+\ No newline at end of file
++}
++
++#endif
+\ No newline at end of file
+diff --git a/Src/CentralSystem.Common/PePr.Zbyny.Common.csproj b/Src/CentralSystem.Common/PePr.Zbyny.Common.csproj
+index 9f5c4f4..168b036 100644
+--- a/Src/CentralSystem.Common/PePr.Zbyny.Common.csproj
++++ b/Src/CentralSystem.Common/PePr.Zbyny.Common.csproj
+@@ -1,7 +1,11 @@
+-<Project Sdk="Microsoft.NET.Sdk">
++﻿<Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+-    <TargetFramework>netstandard2.0</TargetFramework>
++    <TargetFramework>netcoreapp3.0</TargetFramework>
++  </PropertyGroup>
++
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
++    <DefineConstants>TRACE;NET30</DefineConstants>
+   </PropertyGroup>
+ 
+ </Project>
+diff --git a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
+index 5d4eefa..3922c7c 100644
+--- a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
++++ b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
+@@ -1,16 +1,15 @@
+ ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+ 
+   <PropertyGroup>
+-    <TargetFramework>netcoreapp2.2</TargetFramework>
++    <TargetFramework>netcoreapp3.0</TargetFramework>
+     <AssemblyName>PePr.Zbyny.CentralSystem</AssemblyName>
+     <RootNamespace>PePr.Zbyny.CentralSystem</RootNamespace>
+ 
+   </PropertyGroup>
+ 
+-  <ItemGroup>
+-    <PackageReference Include="Microsoft.AspNetCore.App" />
+-    <PackageReference Include="Microsoft.AspNetCore.Razor.Design" Version="2.2.0" PrivateAssets="All" />
+-  </ItemGroup>
++  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
++    <DefineConstants>TRACE;NET30</DefineConstants>
++  </PropertyGroup>
+ 
+   <ItemGroup>
+     <ProjectReference Include="..\CentralSystem.Common\PePr.Zbyny.Common.csproj" />
+diff --git a/Src/CentralSystem/Startup.cs b/Src/CentralSystem/Startup.cs
+index f09ed60..2c1e363 100644
+--- a/Src/CentralSystem/Startup.cs
++++ b/Src/CentralSystem/Startup.cs
+@@ -13,58 +13,58 @@ using Microsoft.Extensions.Hosting;
+ 
+ namespace PePr.Zbyny.CentralSystem
+ {
+-     public class Startup
+-     {
+-         public Startup(IConfiguration configuration)
+-         {
+-             Configuration = configuration;
+-         }
+-
+-         public IConfiguration Configuration { get; }
+-
+-         // This method gets called by the runtime. Use this method to add services to the container.
+-         public void ConfigureServices(IServiceCollection services)
+-         {
+-             services.AddControllersWithViews();
+-
+-    services.AddTransient<IDataRepository, DataRepository>();
+-             services.AddTransient<IProxyStateUpdater, StateUpdater>();
+-             services.AddTransient<IWebStateUpdater, StateUpdater>();
+-             services.AddTransient<IStateProvider, StateProvider>();
+-         }
+-
+-         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+-         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+-         {
+-             if (env.IsDevelopment())
+-             {
+-                 app.UseDeveloperExceptionPage();
+-             }
+-             else
+-             {
+-                 app.UseExceptionHandler("/Home/Error");
+-                 // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+-                 app.UseHsts();
+-             }
++    public class Startup
++    {
++        public Startup(IConfiguration configuration)
++        {
++            Configuration = configuration;
++        }
++
++        public IConfiguration Configuration { get; }
++
++        // This method gets called by the runtime. Use this method to add services to the container.
++        public void ConfigureServices(IServiceCollection services)
++        {
++            services.AddControllersWithViews();
++
++            services.AddTransient<IDataRepository, InMemoryDataRepository>();
++            services.AddTransient<IProxyStateUpdater, StateUpdater>();
++            services.AddTransient<IWebStateUpdater, StateUpdater>();
++            services.AddTransient<IStateProvider, StateProvider>();
++        }
++
++        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
++        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
++        {
++            if (env.IsDevelopment())
++            {
++                app.UseDeveloperExceptionPage();
++            }
++            else
++            {
++                app.UseExceptionHandler("/Home/Error");
++                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
++                app.UseHsts();
++            }
+             // app.UseHttpsRedirection();
+-             app.UseStaticFiles();
++            app.UseStaticFiles();
+ 
+-             app.UseRouting();
++            app.UseRouting();
+ 
+-             app.UseAuthorization();
++            app.UseAuthorization();
+ 
+-             app.UseEndpoints(endpoints =>
+-             {
++            app.UseEndpoints(endpoints =>
++            {
+                  //endpoints.MapControllerRoute(
+                  //    name: "api",
+                  //    pattern: "api/{controller=Proxy}");
+ 
+                  endpoints.MapControllerRoute(
+-                     name: "default",
+-                     pattern: "{controller=Home}/{action=Index}/{id?}");
+-             });
+-         }
+-     }
++                    name: "default",
++                    pattern: "{controller=Home}/{action=Index}/{id?}");
++            });
++        }
++    }
+ }
+ 
+ #else
+diff --git a/Src/CommandProxy/Contracts/OperationalMode.cs b/Src/CommandProxy/Contracts/OperationalMode.cs
+new file mode 100644
+index 0000000..28ac507
+--- /dev/null
++++ b/Src/CommandProxy/Contracts/OperationalMode.cs
+@@ -0,0 +1,22 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Runtime.Serialization;
++using System.Threading.Tasks;
++
++namespace PePr.Zbyny.ProxySystem.Contracts
++{
++    public enum OperationalMode
++    {
++        [EnumMember(Value = "0")]
++        Unknown = 0,
++        [EnumMember(Value = "1")]
++        Off = 1,
++        [EnumMember(Value = "?")]
++        AntiFreezing = 2,
++        [EnumMember(Value = "15")]
++        Manual = 3,
++        [EnumMember(Value = "8")]
++        Program = 4
++    }
++}
+diff --git a/Src/CommandProxy/Contracts/Requests/DeviceCode.cs b/Src/CommandProxy/Contracts/Requests/DeviceCode.cs
+index 4f4cd9b..f318381 100644
+--- a/Src/CommandProxy/Contracts/Requests/DeviceCode.cs
++++ b/Src/CommandProxy/Contracts/Requests/DeviceCode.cs
+@@ -1,7 +1,7 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+@@ -9,9 +9,9 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+     public enum DeviceCode
+     {
+         Unknown = 0,
+-       // [JsonPropertyName("C")]
++       // [DataMember(Name="C")]
+         Heating = 1,
+-      //  [JsonPropertyName("C")]
++      //  [DataMember(Name="C")]
+         Lighting = 2,
+         Outlet = 3
+         /// E - Osvetleni
+diff --git a/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs b/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
+index 20c63f9..2ca92d4 100644
+--- a/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
+@@ -1,65 +1,65 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class DeviceEditRequest : RequestBase
+     {
+-        [JsonPropertyName("2")]
++        [DataMember(Name="2")]
+         public string Id { get; set; }
+ 
+-        [JsonPropertyName("3")]
++        [DataMember(Name="3")]
+         public string nom_appareil { get; set; }
+ 
+-        [JsonPropertyName("4")]
++        [DataMember(Name="4")]
+         public string num_zone { get; set; }
+ 
+-        [JsonPropertyName("6")]
++        [DataMember(Name="6")]
+         public string programme { get; set; }
+ 
+-        [JsonPropertyName("7")]
++        [DataMember(Name="7")]
+         public string consigne_confort { get; set; }
+ 
+-        [JsonPropertyName("8")]
++        [DataMember(Name="8")]
+         public string consigne_hg { get; set; }
+ 
+-        [JsonPropertyName("9")]
++        [DataMember(Name="9")]
+         public string consigne_eco { get; set; }
+ 
+-        [JsonPropertyName("10")]
++        [DataMember(Name="10")]
+         public string consigne_boost { get; set; }
+ 
+-        [JsonPropertyName("11")]
++        [DataMember(Name="11")]
+         public string consigne_manuel { get; set; }
+ 
+-        [JsonPropertyName("12")]
++        [DataMember(Name="12")]
+         public string min_set_point { get; set; }
+ 
+-        [JsonPropertyName("13")]
++        [DataMember(Name="13")]
+         public string max_set_point { get; set; }
+ 
+-        [JsonPropertyName("14")]
++        [DataMember(Name="14")]
+         public string time_boost { get; set; }
+ 
+-        [JsonPropertyName("16")]
++        [DataMember(Name="16")]
+         public string temperature_air { get; set; }
+ 
+-        [JsonPropertyName("17")]
++        [DataMember(Name="17")]
+         public string temperature_sol { get; set; }
+ 
+-        [JsonPropertyName("22")]
+-        public string gv_mode { get; set; }
++        [DataMember(Name="22")]
++        public OperationalMode gv_mode { get; set; }
+ 
+-        [JsonPropertyName("23")]
++        [DataMember(Name="23")]
+         public string Unknown01 { get; set; }
+ 
+-        [JsonPropertyName("33")]
++        [DataMember(Name="33")]
+         public string Unknown02 { get; set; }
+ 
+-        [JsonPropertyName("34")]
++        [DataMember(Name="34")]
+         public string Unknown03 { get; set; }
+ 
+     }
+diff --git a/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs b/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
+index 2d8d39b..6d95b49 100644
+--- a/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
++++ b/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
+@@ -1,19 +1,19 @@
+-﻿using System.Text.Json.Serialization;
++﻿using System.Runtime.Serialization;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class QueryPushItem
+     {
+-        [JsonPropertyName("2")]
++        [DataMember(Name="2")]
+         public string Target { get; set; }
+ 
+-        [JsonPropertyName("15")]
++        [DataMember(Name="15")]
+         public string nv_mode { get; set; }
+ 
+-        [JsonPropertyName("22")]
++        [DataMember(Name="22")]
+         public string gv_mode { get; set; }
+ 
+-        [JsonPropertyName("28")]
++        [DataMember(Name="28")]
+         public string Code { get; set; }
+ 
+         
+diff --git a/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs b/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
+index b36ea5f..70ab6a2 100644
+--- a/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
+@@ -1,17 +1,17 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class QueryPushRequest : RequestBase
+     {
+-        [JsonPropertyName("2")]
++        [DataMember(Name="2")]
+         public string NoIdea { get; set; }
+ 
+-        [JsonPropertyName("query")]
++        [DataMember(Name="query")]
+         public QueryPushItem Query { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/RequestBase.cs b/Src/CommandProxy/Contracts/Requests/RequestBase.cs
+index c3b3a4d..8035bb7 100644
+--- a/Src/CommandProxy/Contracts/Requests/RequestBase.cs
++++ b/Src/CommandProxy/Contracts/Requests/RequestBase.cs
+@@ -1,14 +1,14 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public abstract class RequestBase
+     {
+-        [JsonPropertyName("1")]
+-        public string Identifier { get; set; }
++        [DataMember(Name="1")]
++        public string RequestCounter { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/SmarthomeEditRequest.cs b/Src/CommandProxy/Contracts/Requests/SmarthomeEditRequest.cs
+index b3ab140..79dfa74 100644
+--- a/Src/CommandProxy/Contracts/Requests/SmarthomeEditRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/SmarthomeEditRequest.cs
+@@ -1,20 +1,20 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class SmarthomeEditRequest : RequestBase
+     {
+-        [JsonPropertyName("3")]
++        [DataMember(Name="3")]
+         public Guid MacAddress { get; set; }
+ 
+-        [JsonPropertyName("6")]
++        [DataMember(Name="6")]
+         public string Firmware01 { get; set; }
+ 
+-        [JsonPropertyName("7")]
++        [DataMember(Name="7")]
+         public string Frimware02 { get; set; }
+ 
+         /// <summary>
+@@ -23,26 +23,26 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+         /// O - zasuvky
+         /// </summary>
+ 
+-        [JsonPropertyName("8")]
++        [DataMember(Name="8")]
+         public string Code { get; set; }
+ 
+-        [JsonPropertyName("9")]
++        [DataMember(Name="9")]
+         public string Language { get; set; }
+ 
+-        [JsonPropertyName("12")]
++        [DataMember(Name="12")]
+         public DateTime LocalTime { get; set; }
+ 
+ 
+         /// <summary>
+         /// 0, 1
+         /// </summary>
+-        [JsonPropertyName("15")]
++        [DataMember(Name="15")]
+         public string HolidaySomething { get; set; }
+ 
+-        [JsonPropertyName("16")]
++        [DataMember(Name="16")]
+         public DateTime HolidayStart { get; set; }
+ 
+-        [JsonPropertyName("17")]
++        [DataMember(Name="17")]
+         public DateTime HolidayEnd { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/SmarthomeEditmodeRequest.cs b/Src/CommandProxy/Contracts/Requests/SmarthomeEditmodeRequest.cs
+index a446280..c4c572f 100644
+--- a/Src/CommandProxy/Contracts/Requests/SmarthomeEditmodeRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/SmarthomeEditmodeRequest.cs
+@@ -1,7 +1,7 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+@@ -12,11 +12,11 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+         /// 1 - General
+         /// 2 - Holiday
+         /// </summary>
+-        [JsonPropertyName("25")]
++        [DataMember(Name="25")]
+         public string Type { get; set; }
+ 
+ 
+-        [JsonPropertyName("26")]
++        [DataMember(Name="26")]
+         public string Mode { get; set; }
+ 
+         /// <summary>
+@@ -24,7 +24,7 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+         /// E - Osvetleni
+         /// O - zasuvky
+         /// </summary>
+-        [JsonPropertyName("27")]
++        [DataMember(Name="27")]
+         public string Code { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/SmarthomeTwinRequest.cs b/Src/CommandProxy/Contracts/Requests/SmarthomeTwinRequest.cs
+index f21ed93..052b34a 100644
+--- a/Src/CommandProxy/Contracts/Requests/SmarthomeTwinRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/SmarthomeTwinRequest.cs
+@@ -1,13 +1,14 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class SmarthomeTwinRequest : RequestBase
+     {
+-        [JsonPropertyName("24")]
++        [DataMember(Name="24")]
+         public string RemoteCode { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/StatsInsertRequest.cs b/Src/CommandProxy/Contracts/Requests/StatsInsertRequest.cs
+index aa773d1..e8e025d 100644
+--- a/Src/CommandProxy/Contracts/Requests/StatsInsertRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/StatsInsertRequest.cs
+@@ -1,14 +1,14 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class StatsInsertRequest : RequestBase
+     {
+-        [JsonPropertyName("3")]
++        [DataMember(Name="3")]
+         public Dictionary<string, string> Items { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs b/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
+index 0bc0941..5403b21 100644
+--- a/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
++++ b/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
+@@ -1,17 +1,17 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class ZoneEditallItem
+     {
+-        [JsonPropertyName("2")]
++        [DataMember(Name="2")]
+         public string Id { get; set; }
+ 
+-        [JsonPropertyName("3")]
++        [DataMember(Name="3")]
+         public string Name { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs b/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
+index 4277214..79eb77f 100644
+--- a/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
++++ b/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
+@@ -1,14 +1,14 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
+ {
+     public class ZoneEditallRequest : RequestBase
+     {
+-        [JsonPropertyName("data")]
++        [DataMember(Name="data")]
+         public ZoneEditallItem[] Data { get; set; }
+ 
+ 
+diff --git a/Src/CommandProxy/Contracts/Responses/ResponseBase.cs b/Src/CommandProxy/Contracts/Responses/ResponseBase.cs
+index 04e0d05..dfdbbe6 100644
+--- a/Src/CommandProxy/Contracts/Responses/ResponseBase.cs
++++ b/Src/CommandProxy/Contracts/Responses/ResponseBase.cs
+@@ -1,17 +1,17 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Responses
+ {
+     public class ResponseBase<T>
+     {
+-        [JsonPropertyName("code")]
++        [DataMember(Name="code")]
+         public string Code { get; set; }
+ 
+-        [JsonPropertyName("data")]
++        [DataMember(Name="data")]
+         public T Data { get; set; }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/ResponseDataBase.cs b/Src/CommandProxy/Contracts/Responses/ResponseDataBase.cs
+index 2b10d45..0d986de 100644
+--- a/Src/CommandProxy/Contracts/Responses/ResponseDataBase.cs
++++ b/Src/CommandProxy/Contracts/Responses/ResponseDataBase.cs
+@@ -1,14 +1,14 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json.Serialization;
++using System.Runtime.Serialization;
+ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.ProxySystem.Contracts.Responses
+ {
+     public class ResponseDataBase
+     {
+-        [JsonPropertyName("100")]
++        [DataMember(Name="100")]
+         public string Timestamp => DateTime.Now.ToTimestamp();
+     }
+ }
+diff --git a/Src/CommandProxy/Entities/OperationMode.cs b/Src/CommandProxy/Entities/OperationMode.cs
+new file mode 100644
+index 0000000..c2af01f
+--- /dev/null
++++ b/Src/CommandProxy/Entities/OperationMode.cs
+@@ -0,0 +1,34 @@
++﻿namespace PePr.Zbyny.ProxySystem.Entities
++{
++    public enum OperationMode
++    {
++        Unknown = 0,
++        Off = 1,
++        AntiFreezing = 2,
++        Manual = 3,
++        Program = 4
++    }
++}
++
++namespace PePr.Zbyny.ProxySystem.Contracts
++{
++    public static class OperationalModeExtensions
++    {
++        public static Entities.OperationMode ToEntity(this OperationalMode value)
++        {
++            switch (value)
++            {
++                case OperationalMode.AntiFreezing:
++                    return Entities.OperationMode.AntiFreezing;
++                case OperationalMode.Manual:
++                    return Entities.OperationMode.Manual;
++                case OperationalMode.Off:
++                    return Entities.OperationMode.Off;
++                case OperationalMode.Program:
++                    return Entities.OperationMode.Program;
++                default:
++                    return Entities.OperationMode.Unknown;
++            }
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/Src/CommandProxy/Entities/ProgramTemperatureSet.cs b/Src/CommandProxy/Entities/ProgramTemperatureSet.cs
+new file mode 100644
+index 0000000..8e3ff04
+--- /dev/null
++++ b/Src/CommandProxy/Entities/ProgramTemperatureSet.cs
+@@ -0,0 +1,16 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading.Tasks;
++
++namespace PePr.Zbyny.ProxySystem.Entities
++{
++    public class ProgramTemperatureSet
++    {
++        public int Eco { get; set; }
++
++        public int Comfort{ get; set; }
++
++        public int Boost { get; set; }
++    }
++}
+diff --git a/Src/CommandProxy/Entities/Room.cs b/Src/CommandProxy/Entities/Room.cs
+new file mode 100644
+index 0000000..c371fcb
+--- /dev/null
++++ b/Src/CommandProxy/Entities/Room.cs
+@@ -0,0 +1,52 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading.Tasks;
++
++namespace PePr.Zbyny.ProxySystem.Entities
++{
++    public class Room
++    {
++        public string Id { get; set; }
++
++        public ProgramTemperatureSet TemperatureProgram { get; set; }
++
++        public int TemperatureCurrent { get; set; }
++
++        public int TemperatureManual { get; set; }
++
++        public int TemperatureAntiFreeze { get; set; }
++
++        public int TemperatureMin { get; set; }
++
++        public int TemperatureMax { get; set; }
++
++        public OperationMode Mode { get; set; }
++    }
++}
++
++namespace PePr.Zbyny.ProxySystem.Contracts.Requests
++{
++    public static class DeviceEditRequestExtensions
++    {
++        public static Entities.Room ToEntity(this DeviceEditRequest value)
++        {
++            return new Entities.Room
++            {
++                Id = value.Id,
++                Mode = value.gv_mode.ToEntity(),
++                TemperatureAntiFreeze = Convert.ToInt32(value.consigne_hg),
++                TemperatureCurrent = Convert.ToInt32(value.temperature_air),
++                TemperatureManual = Convert.ToInt32(value.consigne_manuel),
++                TemperatureMax = Convert.ToInt32(value.min_set_point),
++                TemperatureMin = Convert.ToInt32(value.max_set_point),
++                TemperatureProgram = new Entities.ProgramTemperatureSet
++                {
++                    Boost = Convert.ToInt32(value.consigne_boost),
++                    Comfort = Convert.ToInt32(value.consigne_confort),
++                    Eco = Convert.ToInt32(value.consigne_eco)
++                }
++            };
++        }
++    }
++}
+diff --git a/Src/CommandProxy/Helpers/Serializer.cs b/Src/CommandProxy/Helpers/Serializer.cs
+index 1a6cff0..e0766bb 100644
+--- a/Src/CommandProxy/Helpers/Serializer.cs
++++ b/Src/CommandProxy/Helpers/Serializer.cs
+@@ -1,8 +1,9 @@
+ ﻿using System;
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Text.Json;
++//using System.Text.Json;
+ using System.Threading.Tasks;
++using Newtonsoft.Json;
+ 
+ namespace PePr.Zbyny.ProxySystem.Helpers
+ {
+@@ -10,12 +11,12 @@ namespace PePr.Zbyny.ProxySystem.Helpers
+     {
+         public static string Serialize<T>(T value)
+         {
+-            return JsonSerializer.Serialize<T>(value);
++            return JsonConvert.SerializeObject(value);
+         }
+ 
+         public static T Deserialize<T>(string json)
+         {
+-            return JsonSerializer.Deserialize<T>(json);
++            return JsonConvert.DeserializeObject<T>(json);
+         }
+     }
+ }
+diff --git a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+index aa231c5..62db1e4 100644
+--- a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
++++ b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+@@ -1,19 +1,19 @@
+ ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+ 
+   <PropertyGroup>
+-    <TargetFramework>netcoreapp2.2</TargetFramework>
++    <TargetFramework>netcoreapp3.0</TargetFramework>
+     <AssemblyName>PePr.Zbyny.ProxySystem</AssemblyName>
+     <RootNamespace>PePr.Zbyny.ProxySystem</RootNamespace>
+   </PropertyGroup>
+ 
+   <ItemGroup>
+-    <ProjectReference Include="..\CentralSystem.Common\PePr.Zbyny.Common.csproj" />
++    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="3.0.0" />
+   </ItemGroup>
+ 
+   <ItemGroup>
+-    <Reference Include="Microsoft.Extensions.Options">
+-      <HintPath>..\..\..\..\..\Program Files\dotnet\sdk\NuGetFallbackFolder\microsoft.extensions.options\2.2.0\lib\netstandard2.0\Microsoft.Extensions.Options.dll</HintPath>
+-    </Reference>
++    <ProjectReference Include="..\CentralSystem.Common\PePr.Zbyny.Common.csproj" />
+   </ItemGroup>
+ 
++ 
++
+ </Project>
+diff --git a/Src/CommandProxy/Services/IStorage.cs b/Src/CommandProxy/Services/IStorage.cs
+new file mode 100644
+index 0000000..98fb47c
+--- /dev/null
++++ b/Src/CommandProxy/Services/IStorage.cs
+@@ -0,0 +1,15 @@
++﻿using PePr.Zbyny.ProxySystem.Entities;
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading.Tasks;
++
++namespace PePr.Zbyny.ProxySystem.Services
++{
++    public interface IStorage
++    {
++        void StoreRoom(Room room);
++
++
++    }
++}
+diff --git a/Src/CommandProxy/Services/RequestProcessor.cs b/Src/CommandProxy/Services/RequestProcessor.cs
+index 1f86567..05d9169 100644
+--- a/Src/CommandProxy/Services/RequestProcessor.cs
++++ b/Src/CommandProxy/Services/RequestProcessor.cs
+@@ -9,8 +9,20 @@ namespace PePr.Zbyny.ProxySystem.Services
+ {
+     public class RequestProcessor : IRequestProcessor
+     {
++        private IStorage _storage;
++
++        public RequestProcessor(IStorage storage)
++        {
++            _storage = storage;
++        }
++
+         public ResponseBase<ResponseDataBase> ProcessDeviceEditRequest(DeviceEditRequest requestData)
+         {
++            if (requestData.Id.StartsWith("C", StringComparison.OrdinalIgnoreCase))
++            {
++                _storage.StoreRoom(requestData.ToEntity());
++            }
++
+             return new ResponseBase<ResponseDataBase>
+             {
+                 Code = "8",
+diff --git a/Src/CommandProxy/Startup.cs b/Src/CommandProxy/Startup.cs
+index e21c621..8123a07 100644
+--- a/Src/CommandProxy/Startup.cs
++++ b/Src/CommandProxy/Startup.cs
+@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
+ using Microsoft.Extensions.DependencyInjection;
+ using Microsoft.Extensions.Hosting;
+ using Microsoft.Extensions.Logging;
++using PePr.Zbyny.ProxySystem.Configuration;
+ using PePr.Zbyny.ProxySystem.Helpers;
+ using PePr.Zbyny.ProxySystem.Services;
+ 
+@@ -28,7 +29,11 @@ namespace PePr.Zbyny.ProxySystem
+         {
+             //services.AddControllers();
+ 
+-             services.AddControllers(o => { o.UseGeneralRoutePrefix("api/v0.1/machine"); });
++            services.Configure<CentralSystemSettings>(this.Configuration.GetSection("CentralSystem"));
++
++            services
++                .AddControllers(o => { o.UseGeneralRoutePrefix("api/v0.1/machine"); })
++                .AddNewtonsoftJson();
+ 
+             this.RegisterDependencies(services);
+ 
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index e203e94..95c5479 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -5,5 +5,12 @@
+       "System": "Information",
+       "Microsoft": "Information"
+     }
+-  }
++  },
++
++  "CentralSystem": {
++    "BaseAddress": "",
++    "QueryRoute" : "proxy/query",
++    "HouseRoute" : "proxy/house",
++    "RoomRoute" : "proxy/room"
++  } 
+ }
+diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
+index d9d9a9b..c79fade 100644
+--- a/Src/CommandProxy/appsettings.json
++++ b/Src/CommandProxy/appsettings.json
+@@ -6,5 +6,13 @@
+       "Microsoft.Hosting.Lifetime": "Information"
+     }
+   },
+-  "AllowedHosts": "*"
++
++  "AllowedHosts": "*",
++
++  "CentralSystem": {
++    "BaseAddress": "",
++    "QueryRoute": "proxy/query",
++    "HouseRoute": "proxy/house",
++    "RoomRoute": "proxy/room"
++  }
+ }
+-- 
+2.17.1.windows.2
+
