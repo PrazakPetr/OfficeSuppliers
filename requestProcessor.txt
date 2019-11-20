@@ -1,0 +1,20 @@
+public ResponseBase<ResponseDataBase> ProcessDeviceEditAllRequest(DeviceEditAllRequest requestData)
+        {
+
+            if (requestData.Items.Count > 0)
+            {
+                return new ResponseBase<ResponseDataBase>
+                {
+                    Code = "8",
+                    Data = new ResponseDataBase()
+                };
+            }
+            else
+            {
+                return new ResponseBase<ResponseDataBase>
+                {
+                    Code = "9",
+                    Data = new ResponseDataBase()
+                };
+            }
+        }
