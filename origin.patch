@@ -1,805 +1,480 @@
-From 6d548a03861d634e2891f19aedd226fc66e520a2 Mon Sep 17 00:00:00 2001
+From 14f1fefcadd4ae2710c11dedca21eaf16a2339a4 Mon Sep 17 00:00:00 2001
 From: PePr <petr.prazak@outlook.com>
-Date: Sun, 10 Nov 2019 21:57:08 +0100
-Subject: [PATCH] E2E Room update
+Date: Fri, 22 Nov 2019 00:05:24 +0100
+Subject: [PATCH] rename Mode to RoomMode, add modes for whole heating, set
+ corrent enum serialiation
 
 ---
- .../Contracts/SyncState.cs                    |  5 +-
- .../PePr.Zbyny.CentralSystem.csproj           |  4 ++
- Src/CentralSystem/Startup.cs                  |  3 +-
- Src/CommandProxy/Contracts/QueryPushItem.cs   | 20 ++++++
- .../Contracts/Requests/DeviceEditRequest.cs   | 39 +++++------
- .../Contracts/Requests/QueryPushItem.cs       | 19 ------
- .../Contracts/Requests/QueryPushRequest.cs    |  7 +-
- .../Contracts/Requests/ZoneEditallItem.cs     |  7 +-
- .../Contracts/Requests/ZoneEditallRequest.cs  |  5 +-
- .../Contracts/Responses/ResponseChangeMode.cs | 18 +++++
- Src/CommandProxy/Entities/OperationMode.cs    | 17 +++++
- Src/CommandProxy/Entities/Room.cs             | 64 +++++++++++------
- .../Infrastructure/CentralSystemClient.cs     |  3 +-
- .../Infrastructure/StatePublisher.cs          |  5 +-
- .../Services/IRequestProcessor.cs             |  2 +-
- Src/CommandProxy/Services/ISyncStorage.cs     |  8 ++-
- Src/CommandProxy/Services/InMemoryStorage.cs  | 55 ++++++++++++---
- Src/CommandProxy/Services/RequestProcessor.cs | 68 +++++++++++++------
- .../Services/TimedHostedService.cs            |  6 +-
- Src/CommandProxy/appsettings.Development.json |  8 +--
- Src/CommandProxy/appsettings.json             |  2 +-
- 21 files changed, 252 insertions(+), 113 deletions(-)
- create mode 100644 Src/CommandProxy/Contracts/QueryPushItem.cs
- delete mode 100644 Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
- create mode 100644 Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
+ Src/CentralSystem.Common/Contracts/House.cs   |  2 +-
+ .../Contracts/HouseUpdate.cs                  |  2 +-
+ Src/CentralSystem.Common/Contracts/Room.cs    |  2 +-
+ .../Contracts/{Mode.cs => RoomMode.cs}        |  2 +-
+ .../Contracts/RoomUpdate.cs                   |  2 +-
+ .../Contracts/UnitUpdate.cs                   |  2 +-
+ Src/CentralSystem/ConvertTo.cs                | 12 ++---
+ Src/CentralSystem/Entities/OperationMode.cs   |  2 +-
+ Src/CentralSystem/Services/StateUpdater.cs    |  2 +-
+ Src/CentralSystem/Startup.cs                  |  4 +-
+ .../appsettings.Development.json              |  2 +-
+ Src/CommandProxy/Contracts/OperationalMode.cs |  5 +-
+ .../Responses/Changes/OneSocketModeChange.cs  |  9 +++-
+ .../Contracts/Responses/ResponseChangeMode.cs |  2 +-
+ Src/CommandProxy/ConvertTo.cs                 | 47 +++++++++++++------
+ Src/CommandProxy/Services/RequestProcessor.cs | 19 ++++----
+ Src/CommandProxy/Startup.cs                   |  5 +-
+ Src/CommandProxy/appsettings.Development.json |  4 +-
+ Src/CommandProxy/appsettings.json             |  4 +-
+ .../JsonSerializationUnitTests.cs             |  2 +-
+ 20 files changed, 80 insertions(+), 51 deletions(-)
+ rename Src/CentralSystem.Common/Contracts/{Mode.cs => RoomMode.cs} (94%)
 
-diff --git a/Src/CentralSystem.Common/Contracts/SyncState.cs b/Src/CentralSystem.Common/Contracts/SyncState.cs
-index ca35399..6aff4c4 100644
---- a/Src/CentralSystem.Common/Contracts/SyncState.cs
-+++ b/Src/CentralSystem.Common/Contracts/SyncState.cs
-@@ -1,5 +1,6 @@
- ﻿using System;
- using System.Collections.Generic;
-+using System.Runtime.Serialization;
- using System.Text;
- using System.Text.Json.Serialization;
- 
-@@ -7,10 +8,10 @@ namespace PePr.Zbyny.Common.Contracts
- {
-     public class SyncState
+diff --git a/Src/CentralSystem.Common/Contracts/House.cs b/Src/CentralSystem.Common/Contracts/House.cs
+index 545ac26..b4de96c 100644
+--- a/Src/CentralSystem.Common/Contracts/House.cs
++++ b/Src/CentralSystem.Common/Contracts/House.cs
+@@ -11,6 +11,6 @@ namespace PePr.Zbyny.Common.Contracts
      {
--        [JsonPropertyName("I")]
-+      //  [DataMember(Name = "I")]
-         public int Interval { get; set; }
- 
--        [JsonPropertyName("R")]
-+      //  [DataMember(Name = "R")]
-         public List<Room> UpdatedRooms { get; set; }
+         [JsonProperty("M")]
+         [JsonPropertyName("M")]
+-        public Mode Mode { get; set; }
++        public RoomMode Mode { get; set; }
      }
  }
-diff --git a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
-index 3922c7c..ccc3525 100644
---- a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
-+++ b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
-@@ -11,6 +11,10 @@
-     <DefineConstants>TRACE;NET30</DefineConstants>
-   </PropertyGroup>
+\ No newline at end of file
+diff --git a/Src/CentralSystem.Common/Contracts/HouseUpdate.cs b/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
+index 6657077..6ee47b7 100644
+--- a/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/HouseUpdate.cs
+@@ -7,6 +7,6 @@ namespace PePr.Zbyny.Common.Contracts
+     {
+         [JsonProperty("M")]
+         [JsonPropertyName("M")]
+-        public Mode RequiredMode { get; set; }
++        public RoomMode RequiredMode { get; set; }
+     }
+ }
+\ No newline at end of file
+diff --git a/Src/CentralSystem.Common/Contracts/Room.cs b/Src/CentralSystem.Common/Contracts/Room.cs
+index f7aca5c..d0402a3 100644
+--- a/Src/CentralSystem.Common/Contracts/Room.cs
++++ b/Src/CentralSystem.Common/Contracts/Room.cs
+@@ -26,6 +26,6 @@ namespace PePr.Zbyny.Common.Contracts
  
-+  <ItemGroup>
-+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="3.0.0" />
-+  </ItemGroup>
-+
-   <ItemGroup>
-     <ProjectReference Include="..\CentralSystem.Common\PePr.Zbyny.Common.csproj" />
-   </ItemGroup>
+         [JsonProperty("M")]
+         [JsonPropertyName("M")]
+-        public Mode Mode { get; set; }
++        public RoomMode Mode { get; set; }
+     }
+ }
+diff --git a/Src/CentralSystem.Common/Contracts/Mode.cs b/Src/CentralSystem.Common/Contracts/RoomMode.cs
+similarity index 94%
+rename from Src/CentralSystem.Common/Contracts/Mode.cs
+rename to Src/CentralSystem.Common/Contracts/RoomMode.cs
+index 358e437..cae5c2a 100644
+--- a/Src/CentralSystem.Common/Contracts/Mode.cs
++++ b/Src/CentralSystem.Common/Contracts/RoomMode.cs
+@@ -5,7 +5,7 @@ using System.Text;
+ 
+ namespace PePr.Zbyny.Common.Contracts
+ {
+-    public enum Mode
++    public enum RoomMode
+     {
+         [EnumMember(Value = "0")]
+         Unknown = 0,
+diff --git a/Src/CentralSystem.Common/Contracts/RoomUpdate.cs b/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
+index 80fbf9c..a88a1e8 100644
+--- a/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/RoomUpdate.cs
+@@ -14,7 +14,7 @@ namespace PePr.Zbyny.Common.Contracts
+ 
+         [JsonProperty("M", NullValueHandling = NullValueHandling.Ignore)]
+         [JsonPropertyName("M")]
+-        public Mode? RequiredMode { get; set; }
++        public RoomMode? RequiredMode { get; set; }
+ 
+         [JsonProperty("T", NullValueHandling = NullValueHandling.Ignore)]
+         [JsonPropertyName("T")]
+diff --git a/Src/CentralSystem.Common/Contracts/UnitUpdate.cs b/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
+index 593c53f..14c1651 100644
+--- a/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
++++ b/Src/CentralSystem.Common/Contracts/UnitUpdate.cs
+@@ -10,7 +10,7 @@ namespace PePr.Zbyny.Common.Contracts
+     {
+         [JsonProperty("M", NullValueHandling = NullValueHandling.Ignore)]
+         [JsonPropertyName("M")]
+-        public Mode? RequiredHouseMode { get; set; }
++        public RoomMode? RequiredHouseMode { get; set; }
+ 
+         [JsonProperty("R", NullValueHandling = NullValueHandling.Ignore)]
+         [JsonPropertyName("R")]
+diff --git a/Src/CentralSystem/ConvertTo.cs b/Src/CentralSystem/ConvertTo.cs
+index cd40a77..5b96222 100644
+--- a/Src/CentralSystem/ConvertTo.cs
++++ b/Src/CentralSystem/ConvertTo.cs
+@@ -9,9 +9,9 @@ namespace PePr.Zbyny.CentralSystem
+ {
+     public static class ConvertTo
+     {
+-        static public PePr.Zbyny.Common.Contracts.Mode ModeContract(Entities.OperationMode mode)
++        static public PePr.Zbyny.Common.Contracts.RoomMode ModeContract(Entities.OperationMode mode)
+         {
+-            return (PePr.Zbyny.Common.Contracts.Mode)mode;
++            return (PePr.Zbyny.Common.Contracts.RoomMode)mode;
+         }
+ 
+         static public PePr.Zbyny.Common.Contracts.SocketMode ModeContract(Entities.SocketOperationalMode mode)
+@@ -19,14 +19,14 @@ namespace PePr.Zbyny.CentralSystem
+             return (PePr.Zbyny.Common.Contracts.SocketMode)mode;
+         }
+ 
+-        static public PePr.Zbyny.Common.Contracts.Mode? ModeContract(Entities.OperationMode? mode)
++        static public PePr.Zbyny.Common.Contracts.RoomMode? ModeContract(Entities.OperationMode? mode)
+         {
+             return mode == null || mode.Value == Entities.OperationMode.Empty ?
+-                (PePr.Zbyny.Common.Contracts.Mode?)null :
+-                (PePr.Zbyny.Common.Contracts.Mode)mode.Value;
++                (PePr.Zbyny.Common.Contracts.RoomMode?)null :
++                (PePr.Zbyny.Common.Contracts.RoomMode)mode.Value;
+         }
+ 
+-        static public PePr.Zbyny.CentralSystem.Entities.OperationMode OperationModeEntity(PePr.Zbyny.Common.Contracts.Mode mode)
++        static public PePr.Zbyny.CentralSystem.Entities.OperationMode OperationModeEntity(PePr.Zbyny.Common.Contracts.RoomMode mode)
+         {
+             return (PePr.Zbyny.CentralSystem.Entities.OperationMode)mode;
+         }
+diff --git a/Src/CentralSystem/Entities/OperationMode.cs b/Src/CentralSystem/Entities/OperationMode.cs
+index 874f702..f931cb7 100644
+--- a/Src/CentralSystem/Entities/OperationMode.cs
++++ b/Src/CentralSystem/Entities/OperationMode.cs
+@@ -14,7 +14,7 @@ namespace PePr.Zbyny.Common.Contracts
+ {
+     static class OperationModeExtensions
+     {
+-        static public PePr.Zbyny.CentralSystem.Entities.OperationMode ToEntity(this PePr.Zbyny.Common.Contracts.Mode mode)
++        static public PePr.Zbyny.CentralSystem.Entities.OperationMode ToEntity(this PePr.Zbyny.Common.Contracts.RoomMode mode)
+         {
+             return (PePr.Zbyny.CentralSystem.Entities.OperationMode)mode;
+         }
+diff --git a/Src/CentralSystem/Services/StateUpdater.cs b/Src/CentralSystem/Services/StateUpdater.cs
+index 370cd5b..b978ef1 100644
+--- a/Src/CentralSystem/Services/StateUpdater.cs
++++ b/Src/CentralSystem/Services/StateUpdater.cs
+@@ -50,7 +50,7 @@ namespace PePr.Zbyny.CentralSystem.Services
+                 {
+                     Id = r.Key,
+                     RequiredTemperature = r.Required.TemperatureManual,
+-                    RequiredMode = r.Required.Mode != null ? (Mode?)ConvertTo.ModeContract(r.Required.Mode.Value) : null
++                    RequiredMode = r.Required.Mode != null ? (RoomMode?)ConvertTo.ModeContract(r.Required.Mode.Value) : null
+                 });
+ 
+             var updatedSockets = _repository.GetSockets()
 diff --git a/Src/CentralSystem/Startup.cs b/Src/CentralSystem/Startup.cs
-index 2c1e363..4ff3d4a 100644
+index b8a2ceb..71a2a37 100644
 --- a/Src/CentralSystem/Startup.cs
 +++ b/Src/CentralSystem/Startup.cs
-@@ -25,7 +25,8 @@ namespace PePr.Zbyny.CentralSystem
-         // This method gets called by the runtime. Use this method to add services to the container.
-         public void ConfigureServices(IServiceCollection services)
-         {
--            services.AddControllersWithViews();
-+            services.AddControllersWithViews()
-+                .AddNewtonsoftJson(); ;
+@@ -32,8 +32,8 @@ namespace PePr.Zbyny.CentralSystem
  
-             services.AddTransient<IDataRepository, InMemoryDataRepository>();
+             services.AddTransient<IAdminProvider, AdminProvider>();
+ 
+-            //services.AddTransient<IDataRepository, DbDataRepository>();
+-            services.AddTransient<IDataRepository, InMemoryDataRepository>();
++            services.AddTransient<IDataRepository, DbDataRepository>();
++            //services.AddTransient<IDataRepository, InMemoryDataRepository>();
              services.AddTransient<IProxyStateUpdater, StateUpdater>();
-diff --git a/Src/CommandProxy/Contracts/QueryPushItem.cs b/Src/CommandProxy/Contracts/QueryPushItem.cs
-new file mode 100644
-index 0000000..f8de4e2
---- /dev/null
-+++ b/Src/CommandProxy/Contracts/QueryPushItem.cs
-@@ -0,0 +1,20 @@
-+﻿using Newtonsoft.Json;
-+using System.Runtime.Serialization;
+             services.AddTransient<IWebStateUpdater, StateUpdater>();
+             services.AddTransient<IStateProvider, StateProvider>();
+diff --git a/Src/CentralSystem/appsettings.Development.json b/Src/CentralSystem/appsettings.Development.json
+index 459582d..c11f42a 100644
+--- a/Src/CentralSystem/appsettings.Development.json
++++ b/Src/CentralSystem/appsettings.Development.json
+@@ -7,6 +7,6 @@
+     }
+   },
+   "Repository": {
+-    "ConnectionString": "c:\\mytemp\\data.db"
++    "ConnectionString": "data.db"
+   }
+ }
+diff --git a/Src/CommandProxy/Contracts/OperationalMode.cs b/Src/CommandProxy/Contracts/OperationalMode.cs
+index 059c5e7..d2b51c7 100644
+--- a/Src/CommandProxy/Contracts/OperationalMode.cs
++++ b/Src/CommandProxy/Contracts/OperationalMode.cs
+@@ -23,7 +23,10 @@ namespace PePr.Zbyny.ProxySystem.Contracts
+         [EnumMember(Value = "8")]
+         Program = 4,
+ 
++        [EnumMember(Value = "13")]
++        ProgramAll,
 +
-+namespace PePr.Zbyny.ProxySystem.Contracts
-+{
-+    public class QueryPushItem
-+    {
-+        [JsonProperty(PropertyName = "2")]
-+        public string DeviceId { get; set; }
-+
-+        [JsonProperty(PropertyName = "15")]
-+        public OperationalMode nv_mode { get; set; }
-+
-+        [JsonProperty(PropertyName = "22")]
-+        public OperationalMode gv_mode { get; set; }
-+
-+        [JsonProperty(PropertyName = "28")]
-+        public DeviceType? Code { get; set; }
-+    }
-+}
-\ No newline at end of file
-diff --git a/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs b/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
-index 3729cc1..5333363 100644
---- a/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
-+++ b/Src/CommandProxy/Contracts/Requests/DeviceEditRequest.cs
-@@ -1,4 +1,5 @@
--﻿using System;
-+﻿using Newtonsoft.Json;
-+using System;
- using System.Collections.Generic;
- using System.Linq;
- using System.Runtime.Serialization;
-@@ -8,58 +9,58 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
- {
-     public class DeviceEditRequest : RequestBase
-     {
--        [DataMember(Name="2")]
-+        [JsonProperty(PropertyName="2")]
+         [EnumMember(Value = "12")]
+-        On = 5,
++        On
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs b/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
+index c6b23d0..d49bd2e 100644
+--- a/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
++++ b/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
+@@ -11,10 +11,15 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+         [JsonProperty("2", Order = 1)]
          public string DeviceId { get; set; }
  
--        [DataMember(Name="3")]
-+        [JsonProperty(PropertyName="3")]
-         public string nom_appareil { get; set; }
- 
--        [DataMember(Name="4")]
-+        [JsonProperty(PropertyName="4")]
-         public string ZoneId { get; set; }
- 
--        [DataMember(Name="6")]
-+        [JsonProperty(PropertyName="6")]
-         public string programme { get; set; }
- 
--        [DataMember(Name="7")]
-+        [JsonProperty(PropertyName="7")]
-         public string consigne_confort { get; set; }
- 
--        [DataMember(Name="8")]
-+        [JsonProperty(PropertyName="8")]
-         public string consigne_hg { get; set; }
- 
--        [DataMember(Name="9")]
-+        [JsonProperty(PropertyName="9")]
-         public string consigne_eco { get; set; }
- 
--        [DataMember(Name="10")]
-+        [JsonProperty(PropertyName="10")]
-         public string consigne_boost { get; set; }
- 
--        [DataMember(Name="11")]
-+        [JsonProperty(PropertyName="11")]
-         public string consigne_manuel { get; set; }
- 
--        [DataMember(Name="12")]
-+        [JsonProperty(PropertyName="12")]
-         public string min_set_point { get; set; }
- 
--        [DataMember(Name="13")]
-+        [JsonProperty(PropertyName="13")]
-         public string max_set_point { get; set; }
- 
--        [DataMember(Name="14")]
-+        [JsonProperty(PropertyName="14")]
-         public string time_boost { get; set; }
- 
--        [DataMember(Name="16")]
-+        [JsonProperty(PropertyName="16")]
-         public string temperature_air { get; set; }
- 
--        [DataMember(Name="17")]
-+        [JsonProperty(PropertyName="17")]
-         public string temperature_sol { get; set; }
- 
--        [DataMember(Name="22")]
-+        [JsonProperty(PropertyName="22")]
-         public OperationalMode gv_mode { get; set; }
- 
--        [DataMember(Name="23")]
-+        [JsonProperty(PropertyName="23")]
-         public string Unknown01 { get; set; }
- 
--        [DataMember(Name="33")]
-+        [JsonProperty(PropertyName="33")]
-         public string Unknown02 { get; set; }
- 
--        [DataMember(Name="34")]
-+        [JsonProperty(PropertyName="34")]
-         public string Unknown03 { get; set; }
- 
-     }
-diff --git a/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs b/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
-deleted file mode 100644
-index 9a2852d..0000000
---- a/Src/CommandProxy/Contracts/Requests/QueryPushItem.cs
-+++ /dev/null
-@@ -1,19 +0,0 @@
--﻿using System.Runtime.Serialization;
--
--namespace PePr.Zbyny.ProxySystem.Contracts.Requests
--{
--    public class QueryPushItem
--    {
--        [DataMember(Name="2")]
--        public string DeviceId { get; set; }
--
--        [DataMember(Name="15")]
--        public OperationalMode nv_mode { get; set; }
--
--        [DataMember(Name="22")]
+-        [JsonProperty("22", Order = 2)]
 -        public OperationalMode gv_mode { get; set; }
--
--        [DataMember(Name="28")]
--        public DeviceType? Code { get; set; }
--    }
--}
-\ No newline at end of file
-diff --git a/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs b/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
-index 70ab6a2..085e6ad 100644
---- a/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
-+++ b/Src/CommandProxy/Contracts/Requests/QueryPushRequest.cs
-@@ -1,4 +1,5 @@
--﻿using System;
-+﻿using Newtonsoft.Json;
-+using System;
- using System.Collections.Generic;
- using System.Linq;
- using System.Runtime.Serialization;
-@@ -8,10 +9,10 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
- {
-     public class QueryPushRequest : RequestBase
-     {
--        [DataMember(Name="2")]
-+        [JsonProperty(PropertyName = "2")]
-         public string NoIdea { get; set; }
++        [JsonProperty("19", Order = 2)]
++        public string on_off { get; set; }
  
--        [DataMember(Name="query")]
-+        [JsonProperty(PropertyName = "query")]
-         public QueryPushItem Query { get; set; }
-     }
- }
-diff --git a/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs b/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
-index 5403b21..4c7d419 100644
---- a/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
-+++ b/Src/CommandProxy/Contracts/Requests/ZoneEditallItem.cs
-@@ -1,4 +1,5 @@
--﻿using System;
-+﻿using Newtonsoft.Json;
-+using System;
- using System.Collections.Generic;
- using System.Linq;
- using System.Runtime.Serialization;
-@@ -8,10 +9,10 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
- {
-     public class ZoneEditallItem
-     {
--        [DataMember(Name="2")]
-+        [JsonProperty(PropertyName = "2")]
-         public string Id { get; set; }
- 
--        [DataMember(Name="3")]
-+        [JsonProperty(PropertyName = "3")]
-         public string Name { get; set; }
-     }
- }
-diff --git a/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs b/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
-index 6d2b4c9..56b8be9 100644
---- a/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
-+++ b/Src/CommandProxy/Contracts/Requests/ZoneEditallRequest.cs
-@@ -1,4 +1,5 @@
--﻿using System;
-+﻿using Newtonsoft.Json;
-+using System;
- using System.Collections.Generic;
- using System.Linq;
- using System.Runtime.Serialization;
-@@ -8,7 +9,7 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Requests
- {
-     public class ZoneEditallRequest : RequestBase
-     {
--        [DataMember(Name="data")]
-+        [JsonProperty(PropertyName = "data")]
-         public ZoneEditallItem[] Zone { get; set; }
- 
- 
-diff --git a/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs b/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
-new file mode 100644
-index 0000000..97fbec1
---- /dev/null
-+++ b/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
-@@ -0,0 +1,18 @@
-+﻿using Newtonsoft.Json;
-+using System;
-+using System.Collections.Generic;
-+using System.Linq;
-+using System.Threading.Tasks;
+         [JsonProperty("15", Order = 3)]
+         public OperationalMode nv_mode { get; set; }
 +
-+namespace PePr.Zbyny.ProxySystem.Contracts.Responses
-+{
-+    public class ResponseChangeMode : ResponseDataBase
-+    {
-+        [JsonProperty(PropertyName = "2")]
-+        public string NoIdea { get; set; }
++        [JsonProperty("22", Order = 4)]
++        public OperationalMode gv_mode { get; set; }
 +
-+        [JsonProperty(PropertyName = "3")]
-+        public QueryPushItem Query { get; set; }
 +        
-+    }
-+}
-diff --git a/Src/CommandProxy/Entities/OperationMode.cs b/Src/CommandProxy/Entities/OperationMode.cs
-index 81d5f81..b2079c0 100644
---- a/Src/CommandProxy/Entities/OperationMode.cs
-+++ b/Src/CommandProxy/Entities/OperationMode.cs
-@@ -30,6 +30,23 @@ namespace PePr.Zbyny.ProxySystem.Contracts
-                     return Entities.OperationMode.Unknown;
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs b/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
+index 3ed3864..f4ecdbf 100644
+--- a/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
++++ b/Src/CommandProxy/Contracts/Responses/ResponseChangeMode.cs
+@@ -10,7 +10,7 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses
+     public class ResponseChangeMode<TChange> : ResponseDataBase where TChange : IChange
+     {
+         [JsonProperty("2")]
+-        public string NoIdea { get; set; }
++        public string Context { get; set; }
+ 
+         [JsonProperty("3")]
+         public TChange Query { get; set; }
+diff --git a/Src/CommandProxy/ConvertTo.cs b/Src/CommandProxy/ConvertTo.cs
+index 13a066e..8145dce 100644
+--- a/Src/CommandProxy/ConvertTo.cs
++++ b/Src/CommandProxy/ConvertTo.cs
+@@ -28,7 +28,7 @@ namespace PePr.Zbyny.ProxySystem
+             throw new NotImplementedException();
+         }
+ 
+-        public static PePr.Zbyny.ProxySystem.Contracts.OperationalMode Response(Entities.RoomMode value)
++        public static PePr.Zbyny.ProxySystem.Contracts.OperationalMode RoomResponse(Entities.RoomMode value)
+         {
+             switch (value)
+             {
+@@ -45,7 +45,24 @@ namespace PePr.Zbyny.ProxySystem
              }
          }
-+
-+        public static OperationalMode ToResponse(this Entities.OperationMode value)
+ 
+-        public static PePr.Zbyny.ProxySystem.Contracts.OperationalMode Response(Entities.SocketMode value)
++        public static PePr.Zbyny.ProxySystem.Contracts.OperationalMode AllRoomResponse(Entities.RoomMode value)
 +        {
 +            switch (value)
 +            {
-+                case Entities.OperationMode.AntiFreezing:
-+                    return OperationalMode.AntiFreezing;
-+                case Entities.OperationMode.Manual:
-+                    return OperationalMode.Manual;
-+                case Entities.OperationMode.Off:
-+                    return OperationalMode.Off;
-+                case Entities.OperationMode.Program:
-+                    return OperationalMode.Program;
++                case Entities.RoomMode.AntiFreezing:
++                    return PePr.Zbyny.ProxySystem.Contracts.OperationalMode.AntiFreezing;
++                case Entities.RoomMode.Manual:
++                    return PePr.Zbyny.ProxySystem.Contracts.OperationalMode.Manual;
++                case Entities.RoomMode.Off:
++                    return PePr.Zbyny.ProxySystem.Contracts.OperationalMode.Off;
++                case Entities.RoomMode.Program:
++                    return PePr.Zbyny.ProxySystem.Contracts.OperationalMode.ProgramAll;
 +                default:
-+                    return OperationalMode.Unknown;
++                    return PePr.Zbyny.ProxySystem.Contracts.OperationalMode.Unknown;
 +            }
 +        }
-     }
- }
- 
-diff --git a/Src/CommandProxy/Entities/Room.cs b/Src/CommandProxy/Entities/Room.cs
-index ebaf95c..0ae7670 100644
---- a/Src/CommandProxy/Entities/Room.cs
-+++ b/Src/CommandProxy/Entities/Room.cs
-@@ -33,36 +33,60 @@ namespace PePr.Zbyny.ProxySystem.Entities
-         private Room()
-         { }
- 
--        public Room Update(DeviceEditRequest value)
-+        private Room Clone()
-         {
--            this.Source |= RoomSources.DeviceEdit;
-+            return new Entities.Room
-+            {
-+                Source = this.Source,
-+                ZoneId = this.ZoneId,
-+                DeviceId = this.DeviceId,
-+                Name = this.Name,
-+                ModeGv = this.ModeGv,
-+                TemperatureAntiFreeze = this.TemperatureAntiFreeze,
-+                TemperatureCurrent = this.TemperatureCurrent,
-+                TemperatureManual = this.TemperatureManual,
-+                TemperatureMax = this.TemperatureMax,
-+                TemperatureMin = this.TemperatureMin,
-+            };
-+        }
 +
-+        public Room Clone(DeviceEditRequest value)
-+        {
-+            var result = this.Clone();
-+            
-+            result.Source |= RoomSources.DeviceEdit;
- 
--            this.DeviceId = value.DeviceId;
--            this.ModeGv = value.gv_mode.ToEntity();
--            this.TemperatureAntiFreeze = Convert.ToInt32(value.consigne_hg);
--            this.TemperatureCurrent = Convert.ToInt32(value.temperature_air);
--            this.TemperatureManual = Convert.ToInt32(value.consigne_manuel);
--            this.TemperatureMax = Convert.ToInt32(value.min_set_point);
--            this.TemperatureMin = Convert.ToInt32(value.max_set_point);
-+            result.DeviceId = value.DeviceId;
-+            result.ModeGv = value.gv_mode.ToEntity();
-+            result.TemperatureAntiFreeze = Convert.ToInt32(value.consigne_hg);
-+            result.TemperatureCurrent = Convert.ToInt32(value.temperature_air);
-+            result.TemperatureManual = Convert.ToInt32(value.consigne_manuel);
-+            result.TemperatureMax = Convert.ToInt32(value.min_set_point);
-+            result.TemperatureMin = Convert.ToInt32(value.max_set_point);
- 
--            return this;
-+            return result;
-         }
- 
--        public Room Update(ZoneEditallItem value)
-+        public Room Clone(ZoneEditallItem value)
++        public static PePr.Zbyny.ProxySystem.Contracts.OperationalMode SocketResponse(Entities.SocketMode value)
          {
--            Source |= RoomSources.ZoneEditAll;
--            this.ZoneId = value.Id;
--            this.Name = value.Name;
-+            var result = this.Clone();
-+
-+            result.Source |= RoomSources.ZoneEditAll;
-+            
-+            result.ZoneId = value.Id;
-+            result.Name = value.Name;
- 
--            return this;
-+            return result;
-         }
- 
--        public Room Update(QueryPushItem value)
-+        public Room Clone(QueryPushItem value)
-         {
--            Source |= RoomSources.QueryPush;
--            this.ModeGv = value.gv_mode.ToEntity();
--            
--            return this;
-+            var result = this.Clone();
-+
-+            result.Source |= RoomSources.QueryPush;
-+            result.ModeGv = value.gv_mode.ToEntity();
-+
-+            return result;
-         }
- 
-         public static Room Create(DeviceEditRequest value)
-diff --git a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
-index c0d864d..b4532bc 100644
---- a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
-+++ b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
-@@ -6,6 +6,7 @@ using System;
- using System.Collections.Generic;
- using System.Linq;
- using System.Net.Http;
-+using System.Text;
- using System.Threading.Tasks;
- 
- namespace PePr.Zbyny.ProxySystem.Infrastructure
-@@ -53,7 +54,7 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
-         private async Task<UnitUpdate> PutAsync<TData>(string requestUri, TData requestData)
-         {
-             var client = GetClient();
--            HttpResponseMessage response = await client.PutAsync(requestUri, new StringContent(Serializer.Serialize(requestData)));
-+            HttpResponseMessage response = await client.PutAsync(requestUri, new StringContent(Serializer.Serialize(requestData), Encoding.UTF8, "application/json"));
- 
-             return await ReadResponseAsync<UnitUpdate>(response);
-         }
-diff --git a/Src/CommandProxy/Infrastructure/StatePublisher.cs b/Src/CommandProxy/Infrastructure/StatePublisher.cs
-index 4757719..a1b888d 100644
---- a/Src/CommandProxy/Infrastructure/StatePublisher.cs
-+++ b/Src/CommandProxy/Infrastructure/StatePublisher.cs
-@@ -26,12 +26,11 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
-         {
-             var currentRooms = _goldenStorage.GetRooms();
- 
--            _goldenStorage.StoreColdSnapshot();
--
-             UnitUpdate update = await _client.QueryUnitUpdateAsync(new SyncState
+             switch (value)
              {
-                 Interval = interval,
-                 UpdatedRooms = currentRooms
-+                    .Where(r => (r.Source & RoomSources.DeviceEdit) == RoomSources.DeviceEdit )
-                     .Select(r => new PePr.Zbyny.Common.Contracts.Room
-                     {
-                         Id = r.DeviceId,
-@@ -50,7 +49,7 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
-                     _syncStorage.InsertRoomUpdate(RoomUpdateL.Create(roomUpdate));
-                 }
+@@ -62,27 +79,27 @@ namespace PePr.Zbyny.ProxySystem
  
--                _syncStorage.InsertHouseUpdate(update.House.RequiredMode.ToEntity());
-+                _syncStorage.SetRequiredMode(update.House?.RequiredMode.ToEntity());
+         #region Central System <==> Proxy
+ 
+-        public static PePr.Zbyny.ProxySystem.Entities.RoomMode? UnitModeEntity(PePr.Zbyny.Common.Contracts.Mode? value)
++        public static PePr.Zbyny.ProxySystem.Entities.RoomMode? UnitModeEntity(PePr.Zbyny.Common.Contracts.RoomMode? value)
+         {
+             return value == null ? null : (PePr.Zbyny.ProxySystem.Entities.RoomMode?)RoomEntity(value.Value);
+         }
+ 
+-        public static PePr.Zbyny.ProxySystem.Entities.RoomMode? RoomEntity(PePr.Zbyny.Common.Contracts.Mode? value)
++        public static PePr.Zbyny.ProxySystem.Entities.RoomMode? RoomEntity(PePr.Zbyny.Common.Contracts.RoomMode? value)
+         {
+             return value != null ? ConvertTo.RoomEntity(value.Value) : (PePr.Zbyny.ProxySystem.Entities.RoomMode?)null;
+         }
+ 
+-        public static PePr.Zbyny.ProxySystem.Entities.RoomMode RoomEntity(PePr.Zbyny.Common.Contracts.Mode value)
++        public static PePr.Zbyny.ProxySystem.Entities.RoomMode RoomEntity(PePr.Zbyny.Common.Contracts.RoomMode value)
+         {
+             switch (value)
+             {
+-                case PePr.Zbyny.Common.Contracts.Mode.AntiFreezing:
++                case PePr.Zbyny.Common.Contracts.RoomMode.AntiFreezing:
+                     return PePr.Zbyny.ProxySystem.Entities.RoomMode.AntiFreezing;
+-                case PePr.Zbyny.Common.Contracts.Mode.Manual:
++                case PePr.Zbyny.Common.Contracts.RoomMode.Manual:
+                     return PePr.Zbyny.ProxySystem.Entities.RoomMode.Manual;
+-                case PePr.Zbyny.Common.Contracts.Mode.Offline:
++                case PePr.Zbyny.Common.Contracts.RoomMode.Offline:
+                     return PePr.Zbyny.ProxySystem.Entities.RoomMode.Off;
+-                case PePr.Zbyny.Common.Contracts.Mode.Program:
++                case PePr.Zbyny.Common.Contracts.RoomMode.Program:
+                     return PePr.Zbyny.ProxySystem.Entities.RoomMode.Program;
+                 default:
+                     return PePr.Zbyny.ProxySystem.Entities.RoomMode.Unknown;
+@@ -91,20 +108,20 @@ namespace PePr.Zbyny.ProxySystem
+ 
+         
+ 
+-        public static PePr.Zbyny.Common.Contracts.Mode RoomContract(PePr.Zbyny.ProxySystem.Entities.RoomMode value)
++        public static PePr.Zbyny.Common.Contracts.RoomMode RoomContract(PePr.Zbyny.ProxySystem.Entities.RoomMode value)
+         {
+             switch (value)
+             {
+                 case PePr.Zbyny.ProxySystem.Entities.RoomMode.AntiFreezing:
+-                    return PePr.Zbyny.Common.Contracts.Mode.AntiFreezing;
++                    return PePr.Zbyny.Common.Contracts.RoomMode.AntiFreezing;
+                 case PePr.Zbyny.ProxySystem.Entities.RoomMode.Manual:
+-                    return PePr.Zbyny.Common.Contracts.Mode.Manual;
++                    return PePr.Zbyny.Common.Contracts.RoomMode.Manual;
+                 case PePr.Zbyny.ProxySystem.Entities.RoomMode.Off:
+-                    return PePr.Zbyny.Common.Contracts.Mode.Offline;
++                    return PePr.Zbyny.Common.Contracts.RoomMode.Offline;
+                 case PePr.Zbyny.ProxySystem.Entities.RoomMode.Program:
+-                    return PePr.Zbyny.Common.Contracts.Mode.Program;
++                    return PePr.Zbyny.Common.Contracts.RoomMode.Program;
+                 default:
+-                    return PePr.Zbyny.Common.Contracts.Mode.Unknown;
++                    return PePr.Zbyny.Common.Contracts.RoomMode.Unknown;
              }
          }
-     }
-diff --git a/Src/CommandProxy/Services/IRequestProcessor.cs b/Src/CommandProxy/Services/IRequestProcessor.cs
-index a9af5b6..6d73615 100644
---- a/Src/CommandProxy/Services/IRequestProcessor.cs
-+++ b/Src/CommandProxy/Services/IRequestProcessor.cs
-@@ -11,7 +11,7 @@ namespace PePr.Zbyny.ProxySystem.Services
-     {
-         ResponseBase<ResponseDataBase> ProcessDeviceEditRequest(DeviceEditRequest requestData);
  
--        ResponseBase<ResponseDataBase> ProcessQueryCheckRequest(QueryCheckRequest requestData);
-+        ResponseBase<object> ProcessQueryCheckRequest(QueryCheckRequest requestData);
- 
-         ResponseBase<ResponseDataBase> ProcessQueryPushRequest(QueryPushRequest requestData);
- 
-diff --git a/Src/CommandProxy/Services/ISyncStorage.cs b/Src/CommandProxy/Services/ISyncStorage.cs
-index 432e6a7..59361b3 100644
---- a/Src/CommandProxy/Services/ISyncStorage.cs
-+++ b/Src/CommandProxy/Services/ISyncStorage.cs
-@@ -10,8 +10,14 @@ namespace PePr.Zbyny.ProxySystem.Services
-     {
-         IList<RoomUpdateL> GetRoomUpdates();
- 
-+        OperationMode? GetRequiredMode();
-+
-         void InsertRoomUpdate(RoomUpdateL room);
- 
--        void InsertHouseUpdate(OperationMode operationMode);
-+        void SetRequiredMode(OperationMode? operationMode);
-+
-+        void ResetRoomUpdate(RoomUpdateL room);
-+
-+        void ResetRequiredMode();
-     }
- }
-diff --git a/Src/CommandProxy/Services/InMemoryStorage.cs b/Src/CommandProxy/Services/InMemoryStorage.cs
-index 674ef9a..adfb899 100644
---- a/Src/CommandProxy/Services/InMemoryStorage.cs
-+++ b/Src/CommandProxy/Services/InMemoryStorage.cs
-@@ -8,44 +8,81 @@ namespace PePr.Zbyny.ProxySystem.Services
- {
-     public class InMemoryStorage : IGoldenStorage, ISyncStorage
-     {
-+        private static OperationMode? requiredUnitMode;
-+
-+        private static List<Room> hotRooms = new List<Room>();
-+
-+        private static List<Room> coldRooms = new List<Room>();
-+
-+        private static List<RoomUpdateL> requredRooms = new List<RoomUpdateL>();
-+
-         IList<Room> IGoldenStorage.GetColdRooms()
-         {
--            throw new NotImplementedException();
-+            return coldRooms;
-         }
- 
-         IList<Room> IGoldenStorage.GetRooms()
-         {
--            throw new NotImplementedException();
-+            return hotRooms;
-         }
- 
-         void IGoldenStorage.InsertRoom(Room room)
-         {
--            throw new NotImplementedException();
-+            hotRooms.Add(room);
-         }
- 
-         void IGoldenStorage.StoreColdSnapshot()
-         {
--            throw new NotImplementedException();
-+            coldRooms.Clear();
-+
-+            coldRooms.AddRange(hotRooms);
-         }
- 
-         void IGoldenStorage.UpdateRoom(Room room)
-         {
--            throw new NotImplementedException();
-+            var roomToRemove = hotRooms.Where(r => r.DeviceId == room.DeviceId || r.ZoneId == room.ZoneId).FirstOrDefault();
-+
-+            hotRooms.Remove(room);
-+
-+            hotRooms.Add(room);
-         }
- 
-         IList<RoomUpdateL> ISyncStorage.GetRoomUpdates()
-         {
--            throw new NotImplementedException();
-+            return requredRooms;
-         }
- 
--        void ISyncStorage.InsertHouseUpdate(OperationMode operationMode)
-+        void ISyncStorage.SetRequiredMode(OperationMode? operationMode)
-         {
--            throw new NotImplementedException();
-+            requiredUnitMode = operationMode;
-         }
- 
-         void ISyncStorage.InsertRoomUpdate(RoomUpdateL room)
-         {
--            throw new NotImplementedException();
-+            var roomToRemove = requredRooms.Where(r => r.DeviceId == room.DeviceId).FirstOrDefault();
-+
-+            requredRooms.Remove(room);
-+
-+            requredRooms.Add(room);
-+        }
-+
-+        OperationMode? ISyncStorage.GetRequiredMode()
-+        {
-+            return requiredUnitMode;
-+        }
-+
-+        void ISyncStorage.ResetRoomUpdate(RoomUpdateL room)
-+        {
-+            var r = requredRooms.Where(r => r.DeviceId == room.DeviceId).FirstOrDefault();
-+            if (r != null)
-+            {
-+                requredRooms.Remove(r);
-+            }
-+        }
-+
-+        void ISyncStorage.ResetRequiredMode()
-+        {
-+            requiredUnitMode = null;
-         }
-     }
- }
 diff --git a/Src/CommandProxy/Services/RequestProcessor.cs b/Src/CommandProxy/Services/RequestProcessor.cs
-index 92f390e..ea060c0 100644
+index 796f892..67e7e2c 100644
 --- a/Src/CommandProxy/Services/RequestProcessor.cs
 +++ b/Src/CommandProxy/Services/RequestProcessor.cs
-@@ -11,26 +11,29 @@ namespace PePr.Zbyny.ProxySystem.Services
- {
-     public class RequestProcessor : IRequestProcessor
-     {
--        private IGoldenStorage _storage;
-+        private IGoldenStorage _goldenStorage;
- 
--        public RequestProcessor(IGoldenStorage storage)
-+        private ISyncStorage _syncStorage;
-+
-+        public RequestProcessor(IGoldenStorage goldenStorage, ISyncStorage syncStorage)
-         {
--            _storage = storage;
-+            _goldenStorage = goldenStorage;
-+            _syncStorage = syncStorage;
-         }
- 
-         public ResponseBase<ResponseDataBase> ProcessDeviceEditRequest(DeviceEditRequest requestData)
-         {
-             if (requestData.DeviceId.StartsWith("C", StringComparison.OrdinalIgnoreCase))
-             {
--                var room = _storage.GetRooms().Where(r => r.DeviceId == requestData.DeviceId).FirstOrDefault(); 
-+                var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == requestData.DeviceId || r.ZoneId == requestData.ZoneId).FirstOrDefault();
- 
-                 if (room == null)
-                 {
--                    _storage.InsertRoom(Room.Create(requestData));
-+                    _goldenStorage.InsertRoom(Room.Create(requestData));
+@@ -102,8 +102,8 @@ namespace PePr.Zbyny.ProxySystem.Services
+                     {
+                         DeviceId = room.DeviceId,
+                         TemperatureManual = room.RequiredTemperature.Value.ToString(),
+-                        gv_mode = ConvertTo.Response(room.RequiredMode ?? RoomMode.Manual),
+-                        nv_mode = ConvertTo.Response(room.RequiredMode ?? RoomMode.Manual)
++                        gv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual),
++                        nv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual)
+                     };
                  }
-                 else
-                 {
--                    _storage.UpdateRoom(room.Update(requestData));
-+                    _goldenStorage.UpdateRoom(room.Clone(requestData));
+                 else if (room.RequiredMode.HasValue)
+@@ -111,8 +111,8 @@ namespace PePr.Zbyny.ProxySystem.Services
+                     change = new OneRoomModeChange
+                     {
+                         DeviceId = room.DeviceId,
+-                        gv_mode = ConvertTo.Response(room.RequiredMode.Value),
+-                        nv_mode = ConvertTo.Response(room.RequiredMode.Value)
++                        gv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value),
++                        nv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value)
+                     };
                  }
              }
- 
-@@ -41,15 +44,42 @@ namespace PePr.Zbyny.ProxySystem.Services
-             };
-         }
- 
--        public ResponseBase<ResponseDataBase> ProcessQueryCheckRequest(QueryCheckRequest requestData)
-+        public ResponseBase<object> ProcessQueryCheckRequest(QueryCheckRequest requestData)
-         {
--            //pokud neni co zmenit
--            return new ResponseBase<ResponseDataBase>
-+            var roomsToUpdate = _syncStorage.GetRoomUpdates();
-+
-+            var room = roomsToUpdate.FirstOrDefault();
-+
-+            if (room == null)
-             {
--                Code = "2",
--                Data = new ResponseDataBase()
--            };
-+                //pokud neni co zmenit
-+                return new ResponseBase<object>
-+                {
-+                    Code = "2",
-+                    Data = new ResponseDataBase()
-+                };
-+            }
-+            else
-+            {
-+                _syncStorage.ResetRoomUpdate(room);
- 
-+                return new ResponseBase<object>
-+                {
-+                    Code = "1",
-+                    Data = new ResponseChangeMode()
-+                    {
-+                        NoIdea = "1",
-+                        Query = new QueryPushItem
-+                        {
-+                            DeviceId = room.DeviceId,
-+                            gv_mode = room.RequiredMode.ToResponse(),
-+                            nv_mode = room.RequiredMode.ToResponse(),
-+                            Code = null
-+                        }
-+                        
-+                    }
-+                };
-+            }
-             //pokud se neco meni 
-             //code = 1
-         }
-@@ -59,18 +89,18 @@ namespace PePr.Zbyny.ProxySystem.Services
-             var query = requestData.Query;
-             if (query.DeviceId == "all" && query.Code == DeviceType.Heating)
-             {
--                foreach (var room in _storage.GetRooms())
-+                foreach (var room in _goldenStorage.GetRooms())
+@@ -123,8 +123,9 @@ namespace PePr.Zbyny.ProxySystem.Services
+                 change = new OneSocketModeChange
                  {
--                    _storage.UpdateRoom(room.Update(query));
-+                    _goldenStorage.UpdateRoom(room.Clone(query));
-                 }
+                     DeviceId = room.DeviceId,
+-                    gv_mode = ConvertTo.Response(socket.RequiredMode),
+-                    nv_mode = ConvertTo.Response(socket.RequiredMode)
++                    on_off = socket.RequiredMode == SocketMode.On ? "1" : "0",
++                    gv_mode = ConvertTo.SocketResponse(socket.RequiredMode),
++                    nv_mode = ConvertTo.SocketResponse(socket.RequiredMode)
+                 };
              }
-             else
-             {
--                var room = _storage.GetRooms().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
-+                var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
- 
-                 if (room != null)
+             //nakonec to pripadne prepiseme natavenim pro cely dum (predpoklad je, ze cely dum ma vetsi priority) 
+@@ -135,8 +136,8 @@ namespace PePr.Zbyny.ProxySystem.Services
+                 change = new AllRoomsModeChange
                  {
--                    _storage.UpdateRoom(room.Update(query));
-+                    _goldenStorage.UpdateRoom(room.Clone(query));
-                 }
+                     DeviceId = "all",
+-                    gv_mode = ConvertTo.Response(modeToUpdate.Value),
+-                    nv_mode = ConvertTo.Response(modeToUpdate.Value),
++                    gv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
++                    nv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
+                     Code = DeviceType.Heating
+                 };
              }
+@@ -148,7 +149,7 @@ namespace PePr.Zbyny.ProxySystem.Services
+                     Code = "1",
+                     Data = new ResponseChangeMode<IChange>()
+                     {
+-                        NoIdea = "1",
++                        Context = "1",
+                         Query = change
+                     }
+                 };
+diff --git a/Src/CommandProxy/Startup.cs b/Src/CommandProxy/Startup.cs
+index 4088c27..6a80e21 100644
+--- a/Src/CommandProxy/Startup.cs
++++ b/Src/CommandProxy/Startup.cs
+@@ -35,7 +35,10 @@ namespace PePr.Zbyny.ProxySystem
  
-@@ -128,7 +158,7 @@ namespace PePr.Zbyny.ProxySystem.Services
+             services
+                 .AddControllers(o => { o.UseGeneralRoutePrefix("api/v0.1/machine"); })
+-                .AddNewtonsoftJson();
++                .AddNewtonsoftJson( o => o.SerializerSettings.Converters = new List<Newtonsoft.Json.JsonConverter>
++                                                    {
++                                                        new Newtonsoft.Json.Converters.StringEnumConverter()
++                                                    });
  
-         public ResponseBase<ResponseDataBase> ProcessZoneEditAllRequest(ZoneEditallRequest requestData)
-         {
--            var rooms = _storage.GetRooms();
-+            var rooms = _goldenStorage.GetRooms();
- 
-             foreach (var zone in requestData.Zone)
-             {
-@@ -136,11 +166,11 @@ namespace PePr.Zbyny.ProxySystem.Services
- 
-                 if (room == null)
-                 {
--                    _storage.InsertRoom(Room.Create(zone));
-+                    _goldenStorage.InsertRoom(Room.Create(zone));
-                 }
-                 else
-                 {
--                    _storage.UpdateRoom(room.Update(zone));
-+                    _goldenStorage.UpdateRoom(room.Clone(zone));
-                 }
-             }
- 
-diff --git a/Src/CommandProxy/Services/TimedHostedService.cs b/Src/CommandProxy/Services/TimedHostedService.cs
-index 889e52f..0fa0929 100644
---- a/Src/CommandProxy/Services/TimedHostedService.cs
-+++ b/Src/CommandProxy/Services/TimedHostedService.cs
-@@ -14,13 +14,12 @@ namespace PePr.Zbyny.ProxySystem.Services
- {
-     public class TimedHostedService : IHostedService, IDisposable
-     {
--        private int executionCount = 0;
-         private readonly ILogger<TimedHostedService> _logger;
-         private Timer _timer;
- 
-         private readonly IBackgroundTaskQueue _backgroundQueue;
-         private readonly IStatePublisher _statePublisher;
--        private readonly int _interval;
-+        private readonly int _interval = 1;
- 
-         public TimedHostedService(IBackgroundTaskQueue backgroundQueue, IStatePublisher statePublisher, ILogger<TimedHostedService> logger)
-         {
-@@ -41,9 +40,6 @@ namespace PePr.Zbyny.ProxySystem.Services
-         private void DoWork(object state)
-         {
-             _backgroundQueue.QueueBackgroundWorkItem(ct => _statePublisher.SyncStateAsync(_interval, ct));
--
--            _logger.LogInformation(
--                "Timed Hosted Service is working. Count: {Count}", executionCount);
-         }
- 
-         public Task StopAsync(CancellationToken stoppingToken)
+             services.AddHostedService<QueuedHostedService>();
+             services.AddHostedService<TimedHostedService>();
 diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
-index 95c5479..2db4d5f 100644
+index 2d91439..b07800f 100644
 --- a/Src/CommandProxy/appsettings.Development.json
 +++ b/Src/CommandProxy/appsettings.Development.json
-@@ -8,9 +8,9 @@
+@@ -8,13 +8,13 @@
    },
  
    "CentralSystem": {
--    "BaseAddress": "",
--    "QueryRoute" : "proxy/query",
--    "HouseRoute" : "proxy/house",
--    "RoomRoute" : "proxy/room"
-+    "BaseAddress": "http://localhost:54492/api/",
-+    "QueryRoute": "proxy/query",
-+    "HouseRoute": "proxy/house",
-+    "RoomRoute": "proxy/room"
-   } 
+-    "BaseAddress": "http://localhost:54492/api/",
++    "BaseAddress": "http://peprremoteheating.azurewebsites.net/api/",
+     "FullUpdateRoute": "proxy/full",
+     "HouseRoute": "proxy/house",
+     "RoomRoute": "proxy/room"
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval" :  10
++    "FullUpdateInterval" :  1
+   }
  }
 diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
-index c79fade..a0facb6 100644
+index b965c66..e13afa0 100644
 --- a/Src/CommandProxy/appsettings.json
 +++ b/Src/CommandProxy/appsettings.json
-@@ -10,7 +10,7 @@
+@@ -10,13 +10,13 @@
    "AllowedHosts": "*",
  
    "CentralSystem": {
--    "BaseAddress": "",
-+    "BaseAddress": "http://localhost:54492/api/",
-     "QueryRoute": "proxy/query",
+-    "BaseAddress": "http://localhost:54492/api/",
++    "BaseAddress": "http://peprremoteheating.azurewebsites.net/api/",
+     "FullUpdateRoute": "proxy/full",
      "HouseRoute": "proxy/house",
      "RoomRoute": "proxy/room"
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval": 10
++    "FullUpdateInterval": 1
+   }
+ }
+diff --git a/Src/PePr.Zbyny.ProxySystem.UnitTests/JsonSerializationUnitTests.cs b/Src/PePr.Zbyny.ProxySystem.UnitTests/JsonSerializationUnitTests.cs
+index 47c322c..159a36d 100644
+--- a/Src/PePr.Zbyny.ProxySystem.UnitTests/JsonSerializationUnitTests.cs
++++ b/Src/PePr.Zbyny.ProxySystem.UnitTests/JsonSerializationUnitTests.cs
+@@ -13,7 +13,7 @@ namespace PePr.Zbyny.ProxySystem.UnitTests
+             var input = new ResponseBase<ResponseChangeMode>
+             {
+                 Code = "1",
+-                Data = new ResponseChangeMode
++                Data = new ResponseChangeMode<>
+                 {
+                     NoIdea = "1",
+                     Query = new Contracts.QueryPushItem
 -- 
 2.17.1.windows.2
 
