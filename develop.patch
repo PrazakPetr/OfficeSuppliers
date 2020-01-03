@@ -1,0 +1,1996 @@
+From da012151a0ecae9818522c754337dae26f71fecc Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Wed, 25 Dec 2019 21:33:06 +0100
+Subject: [PATCH 1/7] Update Admin view to support dynamic update intervals
+
+---
+ .../Controllers/AdminController.cs            |  8 +-
+ Src/CentralSystem/Models/FullScopeModel.cs    |  4 +-
+ Src/CentralSystem/Services/AdminProvider.cs   | 21 ++++-
+ Src/CentralSystem/Services/IAdminProvider.cs  |  5 +-
+ Src/CentralSystem/Services/IStateProvider.cs  |  2 +
+ .../Services/InMemoryDataRepository.cs        | 40 +++++++++-
+ Src/CentralSystem/Services/StateProvider.cs   |  4 +-
+ Src/CentralSystem/Services/StateUpdater.cs    | 44 ++++++++---
+ Src/CentralSystem/Views/Admin/Index.cshtml    | 76 +++++++++++++------
+ Src/CentralSystem/Views/Home/Index.cshtml     |  2 +-
+ .../Services/TimedHostedService.cs            |  6 +-
+ Src/CommandProxy/appsettings.Development.json |  4 +-
+ Src/CommandProxy/appsettings.json             |  4 +-
+ 13 files changed, 166 insertions(+), 54 deletions(-)
+
+diff --git a/Src/CentralSystem/Controllers/AdminController.cs b/Src/CentralSystem/Controllers/AdminController.cs
+index dbbcb72..f7429dd 100644
+--- a/Src/CentralSystem/Controllers/AdminController.cs
++++ b/Src/CentralSystem/Controllers/AdminController.cs
+@@ -8,7 +8,7 @@ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.CentralSystem.Controllers
+ {
+-    public class AdminController : Controller
++   public class AdminController : Controller
+     {
+         private readonly ILogger<AdminController> _logger;
+         private readonly IAdminProvider _provider;
+@@ -21,7 +21,7 @@ namespace PePr.Zbyny.CentralSystem.Controllers
+         [HttpGet]
+         public IActionResult Index()
+         {
+-            return View();
++            return View(_provider.GetAdminModel());
+         }
+ 
+         [HttpGet()]
+@@ -32,14 +32,14 @@ namespace PePr.Zbyny.CentralSystem.Controllers
+         }
+ 
+         [HttpGet()]
+-        public IActionResult ResetBasic()
++        public IActionResult RefreshBasic()
+         {
+             _provider.RequestUpdate(UpdateType.BasicUpdate);
+             return base.RedirectToAction("Index", "home");
+         }
+ 
+         [HttpGet()]
+-        public IActionResult ResetFull()
++        public IActionResult RefreshFull()
+         {
+             _provider.RequestUpdate(UpdateType.FullUpdate);
+             return base.RedirectToAction("Index", "home");
+diff --git a/Src/CentralSystem/Models/FullScopeModel.cs b/Src/CentralSystem/Models/FullScopeModel.cs
+index c8430d6..47763e1 100644
+--- a/Src/CentralSystem/Models/FullScopeModel.cs
++++ b/Src/CentralSystem/Models/FullScopeModel.cs
+@@ -14,6 +14,8 @@ namespace PePr.Zbyny.CentralSystem.Models
+ 
+         public List<SocketModel> Sockets { get; set; }
+ 
+-        public DateTime NextUpdate { get; set; }
++        
++
++        public DateTime NextPing { get; set; }
+     }
+ }
+diff --git a/Src/CentralSystem/Services/AdminProvider.cs b/Src/CentralSystem/Services/AdminProvider.cs
+index 307cc79..de0cdb5 100644
+--- a/Src/CentralSystem/Services/AdminProvider.cs
++++ b/Src/CentralSystem/Services/AdminProvider.cs
+@@ -1,4 +1,5 @@
+-﻿using System;
++﻿using PePr.Zbyny.CentralSystem.Models;
++using System;
+ using System.Collections.Generic;
+ using System.Linq;
+ using System.Threading.Tasks;
+@@ -24,5 +25,23 @@ namespace PePr.Zbyny.CentralSystem.Services
+             _repository.SetUpdateRequest(type);
+         }
+ 
++        public AdminModel GetAdminModel()
++        {
++            DateTime? nextPing = _repository.GetNextUpdate(UpdateType.Ping);
++
++            UpdateType? updateRequest = _repository.GetUpdateRequest();
++
++            DateTime getNextUpdate(UpdateType? actual, UpdateType required, DateTime? ping)
++            {
++                return ((actual.HasValue && actual == required) ? ping : _repository.GetNextUpdate(required)) ?? DateTime.MaxValue;
++            }
++
++            return new AdminModel
++            {
++                NextBasicUpdate = getNextUpdate(updateRequest, UpdateType.BasicUpdate, nextPing),
++                NextFullUpdate = getNextUpdate(updateRequest, UpdateType.FullUpdate, nextPing)
++            };
++        }
++
+     }
+ }
+diff --git a/Src/CentralSystem/Services/IAdminProvider.cs b/Src/CentralSystem/Services/IAdminProvider.cs
+index a66abe6..303c025 100644
+--- a/Src/CentralSystem/Services/IAdminProvider.cs
++++ b/Src/CentralSystem/Services/IAdminProvider.cs
+@@ -1,4 +1,5 @@
+-﻿using System;
++﻿using PePr.Zbyny.CentralSystem.Models;
++using System;
+ using System.Collections.Generic;
+ using System.Linq;
+ using System.Threading.Tasks;
+@@ -10,5 +11,7 @@ namespace PePr.Zbyny.CentralSystem.Services
+         void ResetCentralSystem();
+ 
+         void RequestUpdate(UpdateType type);
++
++        AdminModel GetAdminModel();
+     }
+ }
+diff --git a/Src/CentralSystem/Services/IStateProvider.cs b/Src/CentralSystem/Services/IStateProvider.cs
+index 59b38f1..6abbe7c 100644
+--- a/Src/CentralSystem/Services/IStateProvider.cs
++++ b/Src/CentralSystem/Services/IStateProvider.cs
+@@ -9,5 +9,7 @@ namespace PePr.Zbyny.CentralSystem.Services
+     public interface IStateProvider
+     {
+         FullScopeModel GetFullScope();
++
++        
+     }
+ }
+diff --git a/Src/CentralSystem/Services/InMemoryDataRepository.cs b/Src/CentralSystem/Services/InMemoryDataRepository.cs
+index 36b07a0..93d5ed5 100644
+--- a/Src/CentralSystem/Services/InMemoryDataRepository.cs
++++ b/Src/CentralSystem/Services/InMemoryDataRepository.cs
+@@ -14,12 +14,25 @@ namespace PePr.Zbyny.CentralSystem.Services
+         private static ConcurrentDictionary<string, RoomSync> rooms = new ConcurrentDictionary<string, RoomSync>();
+ 
+         private static ConcurrentDictionary<string, SocketSync> sockets = new ConcurrentDictionary<string, SocketSync>();
+-
+-
++        
+         private static ConcurrentDictionary<UpdateType, Tuple<DateTime, int>> nextUpdates = new ConcurrentDictionary<UpdateType, Tuple<DateTime, int>>();
+ 
++        private static UpdateType? updateType = null;
++
+         static InMemoryDataRepository()
+         {
++            nextUpdates.AddOrUpdate(UpdateType.Ping,
++                new Tuple<DateTime, int> (DateTime.Now, 1),
++                (k, v) => v);
++
++            nextUpdates.AddOrUpdate(UpdateType.BasicUpdate,
++                new Tuple<DateTime, int>(DateTime.Now.AddMinutes(1), 1),
++                (k, v) => v);
++
++            nextUpdates.AddOrUpdate(UpdateType.FullUpdate,
++                new Tuple<DateTime, int>(DateTime.Now.AddHours(1), 1),
++                (k, v) => v);
++
+             rooms.AddOrUpdate("C001",
+                                 new RoomSync("C001", new Room
+                                 {
+@@ -72,7 +85,9 @@ namespace PePr.Zbyny.CentralSystem.Services
+ 
+         public RoomSync GetRoom(string key)
+         {
+-            return rooms[key];
++            rooms.TryGetValue(key , out RoomSync result);
++
++            return result;
+         }
+ 
+         public IEnumerable<RoomSync> GetRooms()
+@@ -124,7 +139,9 @@ namespace PePr.Zbyny.CentralSystem.Services
+ 
+         public SocketSync GetSocket(string key)
+         {
+-            return sockets[key];
++            sockets.TryGetValue(key, out SocketSync result);
++
++            return result;
+         }
+ 
+         public void SetCurrentSocket(string key, Socket current)
+@@ -147,5 +164,20 @@ namespace PePr.Zbyny.CentralSystem.Services
+                 new SocketSync(),
+                 (i, s) => new SocketSync { Key = key, Current = s.Current, Required = null });
+         }
++
++        public UpdateType? GetUpdateRequest()
++        {
++            return updateType;
++        }
++
++        public void SetUpdateRequest(UpdateType type)
++        {
++            updateType = type;
++        }
++
++        public void ResetUpdateRequest()
++        {
++            updateType = null;
++        }
+     }
+ }
+diff --git a/Src/CentralSystem/Services/StateProvider.cs b/Src/CentralSystem/Services/StateProvider.cs
+index 01e17dc..6c2dd4c 100644
+--- a/Src/CentralSystem/Services/StateProvider.cs
++++ b/Src/CentralSystem/Services/StateProvider.cs
+@@ -38,8 +38,10 @@ namespace PePr.Zbyny.CentralSystem.Services
+                     CurrentMode = s.Current.Mode,
+                     RequiredMode = s.Required?.Mode
+                 }).ToList(),
+-                NextUpdate = _repository.GetNextUpdate(UpdateType.FullUpdate) ?? DateTime.MaxValue
++                NextPing = _repository.GetNextUpdate(UpdateType.Ping) ?? DateTime.MaxValue,
+             };
+         }
++
++        
+     }
+ }
+diff --git a/Src/CentralSystem/Services/StateUpdater.cs b/Src/CentralSystem/Services/StateUpdater.cs
+index cb428b1..0baa9b3 100644
+--- a/Src/CentralSystem/Services/StateUpdater.cs
++++ b/Src/CentralSystem/Services/StateUpdater.cs
+@@ -87,27 +87,49 @@ namespace PePr.Zbyny.CentralSystem.Services
+                 });
+         }
+ 
++
+         public ITransaction<Pong> GetPong()
+         {
++            UpdateType? type = _repository.GetUpdateRequest() ?? (GetUnitUpdate() != null ? UpdateType.BasicUpdate : (UpdateType?)null);
+ 
+-            UpdateType? type = _repository.GetUpdateRequest();
+-
+-            if (type == null)
+-            { 
+-            
+-            }
+-            ?? GetUnitUpdate() != null ? PongType.Basic : null ;
+-            UnitUpdate update = GetUnitUpdate();
++            Pong getPong(UpdateType? updateType) =>
++                updateType switch
++                {
++                    UpdateType.BasicUpdate => new Pong { Type = PongType.Basic },
++                    UpdateType.FullUpdate => new Pong { Type = PongType.Full },
++                    _ => null
++                };
+ 
+-            return new Transaction<Pong>(update != null ? new Pong { Type = PongType.Basic } : null,
+-                (state) => { });
++            return new Transaction<Pong>(getPong(type),
++                (state) =>
++                {
++                    _repository.ResetUpdateRequest();
++                });
+         }
+ 
+         public void UpdateTick(UpdateType updateType, int? tick)
+         {
++            if (updateType != UpdateType.Ping)
++            {
++                UpdateType? required = _repository.GetUpdateRequest();
++
++                if ((updateType == UpdateType.FullUpdate) ||
++                    (updateType == UpdateType.BasicUpdate && required != UpdateType.FullUpdate))
++                {
++                    _repository.ResetUpdateRequest();
++                }
++            }
++
+             if (tick != null)
+             {
+-                _repository.SetNextUpdate(updateType, DateTime.Now.AddMinutes(tick.Value), tick.Value);
++                _repository.SetNextUpdate(updateType,
++                    DateTime.Now.AddSeconds(tick.Value * updateType switch 
++                    {
++                        UpdateType.BasicUpdate => 60,
++                        UpdateType.FullUpdate => 60 * 60,
++                        _ => 1
++                    }),
++                    tick.Value);
+             }
+         }
+ 
+diff --git a/Src/CentralSystem/Views/Admin/Index.cshtml b/Src/CentralSystem/Views/Admin/Index.cshtml
+index 0853623..da54cd7 100644
+--- a/Src/CentralSystem/Views/Admin/Index.cshtml
++++ b/Src/CentralSystem/Views/Admin/Index.cshtml
+@@ -1,33 +1,59 @@
+-﻿@{
++﻿@model PePr.Zbyny.CentralSystem.Models.AdminModel
++
++@{
+     ViewData["Title"] = "Admin Page";
+ }
+-    <div class="container">
+-        <div class="row justify-content-center">
+-            <div class="card" style="width: 18rem;">
+-                <div class="card-body">
+-                    <h5 class="card-title">Vymazat pokoje</h5>
+-                    <p class="card-text">Vymaže všechny pokoje z centrálního systému.</p>
+-                    <button type="button" class="btn btn-danger" data-toggle="modal" data-target="#resetDb">Vymazat</button>
+-                </div>
++
++    <div class="alert alert-primary" role="alert">
++        Přístí základní aktualizace v <strong>@Model.NextBasicUpdate</strong>.<br />
++        Přístí úplná aktualizace v <strong>@Model.NextFullUpdate</strong>.
++    </div>
++
++<div class="container">
++    <div class="row justify-content-center">
++        <div class="card" style="width: 18rem;">
++            <div class="card-body">
++                <h5 class="card-title">Vymazat pokoje</h5>
++                <p class="card-text">Vymaže všechny pokoje z centrálního systému.</p>
++                <button type="button" class="btn btn-danger" data-toggle="modal" data-target="#resetDb">Vymazat</button>
+             </div>
+         </div>
+-        <div class="modal fade" id="resetDb" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
+-            <div class="modal-dialog" role="document">
+-                <div class="modal-content">
+-                    <div class="modal-header">
+-                        <h5 class="modal-title">Potvrzení</h5>
+-                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+-                            <span aria-hidden="true">&times;</span>
+-                        </button>
+-                    </div>
+-                    <div class="modal-body">
+-                        <p>Skutečně vymazat celé nsatavení?</p>
+-                    </div>
+-                    <div class="modal-footer">
+-                        <a href="/Admin/reset" class="btn btn-danger">Potvrdit</a>
+-                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Zrusit</button>
+-                    </div>
++    </div>
++    <div class="modal fade" id="resetDb" tabindex="-1" role="dialog" aria-labelledby="exampleModalLabel" aria-hidden="true">
++        <div class="modal-dialog" role="document">
++            <div class="modal-content">
++                <div class="modal-header">
++                    <h5 class="modal-title">Potvrzení</h5>
++                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
++                        <span aria-hidden="true">&times;</span>
++                    </button>
+                 </div>
++                <div class="modal-body">
++                    <p>Skutečně vymazat celé nsatavení?</p>
++                </div>
++                <div class="modal-footer">
++                    <a href="/Admin/reset" class="btn btn-danger">Potvrdit</a>
++                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Zrusit</button>
++                </div>
++            </div>
++        </div>
++    </div>
++    <div class="row justify-content-center">
++        <div class="card" style="width: 18rem;">
++            <div class="card-body">
++                <h5 class="card-title">Základní aktualizace</h5>
++                <p class="card-text">Aktualizují se zakladní údaje.</p>
++                <a href="/Admin/refreshBasic" type="button" class="btn btn-warning" data-target="#basicRefresh">Aktualizovat</a>
++            </div>
++        </div>
++    </div>
++    <div class="row justify-content-center">
++        <div class="card" style="width: 18rem;">
++            <div class="card-body">
++                <h5 class="card-title">Úplná aktualizace</h5>
++                <p class="card-text">Aktualizují se všechny údaje.</p>
++                <a href="/Admin/refreshFull" type="button" class="btn btn-warning" data-target="#basicRefresh">Aktualizovat</a>
+             </div>
+         </div>
+     </div>
++</div>
+diff --git a/Src/CentralSystem/Views/Home/Index.cshtml b/Src/CentralSystem/Views/Home/Index.cshtml
+index dd325dc..6321e1d 100644
+--- a/Src/CentralSystem/Views/Home/Index.cshtml
++++ b/Src/CentralSystem/Views/Home/Index.cshtml
+@@ -6,7 +6,7 @@
+ }
+ 
+     <div class="alert alert-primary" role="alert">
+-        Přístí očekávaná aktualizace v <strong>@Model.NextUpdate</strong>.
++        Přístí očekávaná aktualizace v <strong>@Model.NextPing</strong>.<br/>
+     </div>
+ 
+ @Html.Partial("_UnitView", Model.Unit)
+diff --git a/Src/CommandProxy/Services/TimedHostedService.cs b/Src/CommandProxy/Services/TimedHostedService.cs
+index 7875be9..4881162 100644
+--- a/Src/CommandProxy/Services/TimedHostedService.cs
++++ b/Src/CommandProxy/Services/TimedHostedService.cs
+@@ -39,17 +39,17 @@ namespace PePr.Zbyny.ProxySystem.Services
+ 
+             if (_options.FullUpdateInterval > 0)
+             {
+-                _fullUpdateTimer = new Timer(OnFullUpdate, null, TimeSpan.Zero, TimeSpan.FromSeconds(_options.FullUpdateInterval * 60));
++                _fullUpdateTimer = new Timer(OnFullUpdate, null, TimeSpan.Zero, TimeSpan.FromHours(_options.FullUpdateInterval));
+             }
+ 
+             if (_options.BasicUpdateInterval > 0)
+             {
+-                _basicUpdateTimer = new Timer(OnBasicUpdate, null, TimeSpan.Zero, TimeSpan.FromSeconds(_options.BasicUpdateInterval * 60));
++                _basicUpdateTimer = new Timer(OnBasicUpdate, null, TimeSpan.Zero, TimeSpan.FromMinutes(_options.BasicUpdateInterval));
+             }
+ 
+             if (_options.PingInterval > 0)
+             {
+-                _pingTimer = new Timer(OnPingUpdate, null, TimeSpan.Zero, TimeSpan.FromSeconds(_options.PingInterval * 60));
++                _pingTimer = new Timer(OnPingUpdate, null, TimeSpan.Zero, TimeSpan.FromSeconds(_options.PingInterval));
+             }
+ 
+             return Task.CompletedTask;
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index ac66d9e..c90ae2a 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -17,6 +17,8 @@
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval": -1
++    "FullUpdateInterval": 3,
++    "BasicUpdateInterval": 2,
++    "PingInterval": 30
+   }
+ }
+diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
+index 8c4fba6..39bf145 100644
+--- a/Src/CommandProxy/appsettings.json
++++ b/Src/CommandProxy/appsettings.json
+@@ -19,6 +19,8 @@
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval": -1
++    "FullUpdateInterval": -1,
++    "BasicUpdateInterval": -1,
++    "PingInterval": 30
+   }
+ }
+-- 
+2.17.1.windows.2
+
+
+From f22b187abfea5e0b846222976c5db6932938bd3d Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Wed, 25 Dec 2019 21:53:07 +0100
+Subject: [PATCH 2/7] Azure AD Authentication
+
+---
+ .../Controllers/AdminController.cs            |  6 ++-
+ .../Controllers/HomeController.cs             | 17 ++++++++
+ .../Controllers/SummaryController.cs          | 41 +++++++++++++++++++
+ Src/CentralSystem/Models/AdminModel.cs        | 14 +++++++
+ .../PePr.Zbyny.CentralSystem.csproj           |  4 +-
+ Src/CentralSystem/Startup.cs                  | 12 +++++-
+ Src/CentralSystem/Views/Shared/_Layout.cshtml |  8 +++-
+ Src/CentralSystem/Views/Summary/Index.cshtml  | 30 ++++++++++++++
+ .../Views/Summary/_RoomView.cshtml            | 17 ++++++++
+ .../Views/Summary/_SocketView.cshtml          | 15 +++++++
+ .../appsettings.Development.json              |  7 ++++
+ Src/CentralSystem/appsettings.json            |  7 ++++
+ 12 files changed, 172 insertions(+), 6 deletions(-)
+ create mode 100644 Src/CentralSystem/Controllers/SummaryController.cs
+ create mode 100644 Src/CentralSystem/Models/AdminModel.cs
+ create mode 100644 Src/CentralSystem/Views/Summary/Index.cshtml
+ create mode 100644 Src/CentralSystem/Views/Summary/_RoomView.cshtml
+ create mode 100644 Src/CentralSystem/Views/Summary/_SocketView.cshtml
+
+diff --git a/Src/CentralSystem/Controllers/AdminController.cs b/Src/CentralSystem/Controllers/AdminController.cs
+index f7429dd..d55c853 100644
+--- a/Src/CentralSystem/Controllers/AdminController.cs
++++ b/Src/CentralSystem/Controllers/AdminController.cs
+@@ -1,4 +1,5 @@
+-﻿using Microsoft.AspNetCore.Mvc;
++﻿using Microsoft.AspNetCore.Authorization;
++using Microsoft.AspNetCore.Mvc;
+ using Microsoft.Extensions.Logging;
+ using PePr.Zbyny.CentralSystem.Services;
+ using System;
+@@ -8,7 +9,8 @@ using System.Threading.Tasks;
+ 
+ namespace PePr.Zbyny.CentralSystem.Controllers
+ {
+-   public class AdminController : Controller
++    [Authorize]
++    public class AdminController : Controller
+     {
+         private readonly ILogger<AdminController> _logger;
+         private readonly IAdminProvider _provider;
+diff --git a/Src/CentralSystem/Controllers/HomeController.cs b/Src/CentralSystem/Controllers/HomeController.cs
+index c955893..e79ed6c 100644
+--- a/Src/CentralSystem/Controllers/HomeController.cs
++++ b/Src/CentralSystem/Controllers/HomeController.cs
+@@ -3,6 +3,9 @@ using System.Collections.Generic;
+ using System.Diagnostics;
+ using System.Linq;
+ using System.Threading.Tasks;
++using Microsoft.AspNetCore.Authentication;
++using Microsoft.AspNetCore.Authentication.AzureAD.UI;
++using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Mvc;
+ using Microsoft.Extensions.Logging;
+ using PePr.Zbyny.CentralSystem.Models;
+@@ -10,6 +13,7 @@ using PePr.Zbyny.CentralSystem.Services;
+ 
+ namespace PePr.Zbyny.CentralSystem.Controllers
+ {
++    [Authorize]
+     public class HomeController : Controller
+     {
+         private readonly ILogger<HomeController> _logger;
+@@ -55,6 +59,19 @@ namespace PePr.Zbyny.CentralSystem.Controllers
+         {
+             return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
+         }
++
++        [HttpGet("SignOut")]
++        public IActionResult SignOut()
++        {
++            return SignOut(
++                new AuthenticationProperties
++                { 
++                    RedirectUri = "/Summary"
++                },
++                AzureADDefaults.AuthenticationScheme,
++                AzureADDefaults.CookieScheme,
++                AzureADDefaults.OpenIdScheme);
++        }
+     }
+ }
+ 
+diff --git a/Src/CentralSystem/Controllers/SummaryController.cs b/Src/CentralSystem/Controllers/SummaryController.cs
+new file mode 100644
+index 0000000..774e561
+--- /dev/null
++++ b/Src/CentralSystem/Controllers/SummaryController.cs
+@@ -0,0 +1,41 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Diagnostics;
++using System.Linq;
++using System.Threading.Tasks;
++using Microsoft.AspNetCore.Authorization;
++using Microsoft.AspNetCore.Mvc;
++using Microsoft.Extensions.Logging;
++using PePr.Zbyny.CentralSystem.Models;
++using PePr.Zbyny.CentralSystem.Services;
++
++namespace PePr.Zbyny.CentralSystem.Controllers
++{
++    
++    public class SummaryController : Controller
++    {
++        private readonly ILogger<HomeController> _logger;
++        private readonly IWebStateUpdater _updater;
++        private readonly IStateProvider _provider;
++
++        public SummaryController(ILogger<HomeController> logger, IWebStateUpdater updater, IStateProvider provider)
++        {
++            _logger = logger;
++            _updater = updater;
++            _provider = provider;
++        }
++
++        [HttpGet]
++        public IActionResult Index()
++        {
++            return View(_provider.GetFullScope());
++        }
++
++        [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
++        public IActionResult Error()
++        {
++            return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
++        }
++    }
++}
++
+diff --git a/Src/CentralSystem/Models/AdminModel.cs b/Src/CentralSystem/Models/AdminModel.cs
+new file mode 100644
+index 0000000..2615300
+--- /dev/null
++++ b/Src/CentralSystem/Models/AdminModel.cs
+@@ -0,0 +1,14 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading.Tasks;
++
++namespace PePr.Zbyny.CentralSystem.Models
++{
++    public class AdminModel
++    {
++        public DateTime NextFullUpdate { get; set; }
++
++        public DateTime NextBasicUpdate { get; set; }
++    }
++}
+diff --git a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
+index 17848d3..be969e1 100644
+--- a/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
++++ b/Src/CentralSystem/PePr.Zbyny.CentralSystem.csproj
+@@ -13,8 +13,10 @@
+ 
+   <ItemGroup>
+     <PackageReference Include="LiteDB" Version="4.1.4" />
++    <PackageReference Include="Microsoft.AspNetCore.Authentication.AzureAD.UI" Version="3.0.0" />
++    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="3.0.0" />
+     <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="3.0.0" />
+-    <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="3.0.0-preview8-19413-06" />
++    <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="3.0.0" />
+   </ItemGroup>
+ 
+   <ItemGroup>
+diff --git a/Src/CentralSystem/Startup.cs b/Src/CentralSystem/Startup.cs
+index b8a2ceb..238f3ae 100644
+--- a/Src/CentralSystem/Startup.cs
++++ b/Src/CentralSystem/Startup.cs
+@@ -10,6 +10,8 @@ using Microsoft.Extensions.Configuration;
+ using Microsoft.Extensions.DependencyInjection;
+ using Microsoft.Extensions.Hosting;
+ using PePr.Zbyny.CentralSystem.Configuration;
++using Microsoft.AspNetCore.Authentication.AzureAD.UI;
++using Microsoft.AspNetCore.Authentication;
+ 
+ namespace PePr.Zbyny.CentralSystem
+ {
+@@ -37,6 +39,10 @@ namespace PePr.Zbyny.CentralSystem
+             services.AddTransient<IProxyStateUpdater, StateUpdater>();
+             services.AddTransient<IWebStateUpdater, StateUpdater>();
+             services.AddTransient<IStateProvider, StateProvider>();
++
++            services.AddAuthentication(AzureADDefaults.AuthenticationScheme)
++                        .AddAzureAD(options => Configuration.Bind("AzureAD", options));
++
+         }
+ 
+         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+@@ -48,7 +54,7 @@ namespace PePr.Zbyny.CentralSystem
+             }
+             else
+             {
+-                app.UseExceptionHandler("/Home/Error");
++                app.UseExceptionHandler("/Summary/Error");
+                 // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+                 app.UseHsts();
+             }
+@@ -57,8 +63,10 @@ namespace PePr.Zbyny.CentralSystem
+ 
+             app.UseRouting();
+ 
++            app.UseAuthentication();
+             app.UseAuthorization();
+ 
++
+             app.UseEndpoints(endpoints =>
+             {
+                  //endpoints.MapControllerRoute(
+@@ -67,7 +75,7 @@ namespace PePr.Zbyny.CentralSystem
+ 
+                  endpoints.MapControllerRoute(
+                     name: "default",
+-                    pattern: "{controller=Home}/{action=Index}/{id?}");
++                    pattern: "{controller=Summary}/{action=Index}/{id?}");
+             });
+         }
+     }
+diff --git a/Src/CentralSystem/Views/Shared/_Layout.cshtml b/Src/CentralSystem/Views/Shared/_Layout.cshtml
+index 722aeb6..350ae49 100644
+--- a/Src/CentralSystem/Views/Shared/_Layout.cshtml
++++ b/Src/CentralSystem/Views/Shared/_Layout.cshtml
+@@ -11,19 +11,25 @@
+     <header>
+         <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
+             <div class="container">
+-                <a class="navbar-brand" asp-area="" asp-controller="Home" asp-action="Index">Remote Heating</a>
++                <a class="navbar-brand" asp-area="" asp-controller="Summary" asp-action="Index">Remote Heating</a>
+                 <button class="navbar-toggler" type="button" data-toggle="collapse" data-target=".navbar-collapse" aria-controls="navbarSupportedContent"
+                         aria-expanded="false" aria-label="Toggle navigation">
+                     <span class="navbar-toggler-icon"></span>
+                 </button>
+                 <div class="navbar-collapse collapse d-sm-inline-flex flex-sm-row-reverse">
+                     <ul class="navbar-nav flex-grow-1">
++                        <li class="nav-item">
++                            <a class="nav-link text-dark" asp-area="" asp-controller="Summary" asp-action="Index">Summary</a>
++                        </li>
+                         <li class="nav-item">
+                             <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Index">Home</a>
+                         </li>
+                         <li class="nav-item">
+                             <a class="nav-link text-dark" asp-area="" asp-controller="Admin" asp-action="Index">Admin</a>
+                         </li>
++                        <li class="nav-item">
++                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="SignOut">Sign Out</a>
++                        </li>
+                     </ul>
+                 </div>
+             </div>
+diff --git a/Src/CentralSystem/Views/Summary/Index.cshtml b/Src/CentralSystem/Views/Summary/Index.cshtml
+new file mode 100644
+index 0000000..25907ba
+--- /dev/null
++++ b/Src/CentralSystem/Views/Summary/Index.cshtml
+@@ -0,0 +1,30 @@
++﻿@using Mode = PePr.Zbyny.CentralSystem.Entities.OperationMode
++@model PePr.Zbyny.CentralSystem.Models.FullScopeModel
++
++@{
++    ViewData["Title"] = "Home Page";
++}
++
++<div class="alert alert-primary" role="alert">
++    Přístí očekávaná aktualizace v <strong>@Model.NextPing</strong>.<br />
++</div>
++
++<div>
++    <div>
++        @for (int i = 0; i < Model.Rooms.Count; i++)
++        {
++            @Html.Partial("_RoomView", Model.Rooms[i])
++        }
++    </div>
++</div>
++
++<div>
++    <div>
++        @for (int i = 0; i < Model.Sockets.Count; i++)
++        {
++            @Html.Partial("_SocketView", Model.Sockets[i])
++        }
++    </div>
++</div>
++
++
+diff --git a/Src/CentralSystem/Views/Summary/_RoomView.cshtml b/Src/CentralSystem/Views/Summary/_RoomView.cshtml
+new file mode 100644
+index 0000000..8c82131
+--- /dev/null
++++ b/Src/CentralSystem/Views/Summary/_RoomView.cshtml
+@@ -0,0 +1,17 @@
++﻿@model PePr.Zbyny.CentralSystem.Models.RoomModel
++@using Mode = PePr.Zbyny.CentralSystem.Entities.OperationMode
++
++
++
++<div class="card m-2">
++    <div class="card-header"><h3>@(Model.Name ?? Model.Id) --- @Model.CurrentTemp °C</h3></div>
++    <div class="card-body">
++        <div class="container">
++            <div class="row justify-content-start">
++                <div class="col border ">Teplota: @(Model.CurrentManualTemp == null ? "??" : Model.CurrentManualTemp.ToString()) °C</div>
++                <div class="col border ">Mód: @Model.CurrentMode</div>
++            </div>
++        </div>
++    </div>
++</div>
++
+diff --git a/Src/CentralSystem/Views/Summary/_SocketView.cshtml b/Src/CentralSystem/Views/Summary/_SocketView.cshtml
+new file mode 100644
+index 0000000..31dce91
+--- /dev/null
++++ b/Src/CentralSystem/Views/Summary/_SocketView.cshtml
+@@ -0,0 +1,15 @@
++﻿@model PePr.Zbyny.CentralSystem.Models.SocketModel
++@using Mode = PePr.Zbyny.CentralSystem.Entities.SocketOperationalMode
++
++
++
++<div class="card m-2">
++    <div class="card-header"><h3>@Model.Name</h3></div>
++    <div class="card-body">
++        <div class="container">
++            <div class="row justify-content-start">
++                <div class="col border ">Mód: @Model.CurrentMode</div>
++            </div>
++        </div>
++    </div>
++</div>
+\ No newline at end of file
+diff --git a/Src/CentralSystem/appsettings.Development.json b/Src/CentralSystem/appsettings.Development.json
+index c11f42a..088cdd0 100644
+--- a/Src/CentralSystem/appsettings.Development.json
++++ b/Src/CentralSystem/appsettings.Development.json
+@@ -1,4 +1,11 @@
+ {
++  "AzureAD": {
++    "Instance": "https://login.microsoftonline.com/",
++    "Domain": "petrprazakoutlook.onmicrosoft.com",
++    "TenantId": "f05543a2-255d-4f0e-8304-97de4ec2e05a",
++    "ClientId": "752a90b5-920f-4b79-a8b4-27e32cc3c0dd"
++  },
++
+   "Logging": {
+     "LogLevel": {
+       "Default": "Debug",
+diff --git a/Src/CentralSystem/appsettings.json b/Src/CentralSystem/appsettings.json
+index c3b38a6..2c5f7c0 100644
+--- a/Src/CentralSystem/appsettings.json
++++ b/Src/CentralSystem/appsettings.json
+@@ -1,4 +1,11 @@
+ {
++  "AzureAD": {
++    "Instance": "https://login.microsoftonline.com/",
++    "Domain": "petrprazakoutlook.onmicrosoft.com",
++    "TenantId": "f05543a2-255d-4f0e-8304-97de4ec2e05a",
++    "ClientId": "752a90b5-920f-4b79-a8b4-27e32cc3c0dd"
++  },
++
+   "Logging": {
+     "LogLevel": {
+       "Default": "Information",
+-- 
+2.17.1.windows.2
+
+
+From fc032e546bd9f70563557545afd699b6839dd56f Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Fri, 3 Jan 2020 11:31:07 +0100
+Subject: [PATCH 3/7] Switch to DB providers
+
+---
+ Src/CentralSystem/Startup.cs                   | 4 ++--
+ Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj | 1 +
+ Src/CommandProxy/Startup.cs                    | 7 +++++--
+ Src/CommandProxy/appsettings.Development.json  | 6 +++++-
+ Src/CommandProxy/appsettings.json              | 6 +++++-
+ 5 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/Src/CentralSystem/Startup.cs b/Src/CentralSystem/Startup.cs
+index 238f3ae..6d4503b 100644
+--- a/Src/CentralSystem/Startup.cs
++++ b/Src/CentralSystem/Startup.cs
+@@ -34,8 +34,8 @@ namespace PePr.Zbyny.CentralSystem
+ 
+             services.AddTransient<IAdminProvider, AdminProvider>();
+ 
+-            //services.AddTransient<IDataRepository, DbDataRepository>();
+-            services.AddTransient<IDataRepository, InMemoryDataRepository>();
++            services.AddTransient<IDataRepository, DbDataRepository>();
++            //services.AddTransient<IDataRepository, InMemoryDataRepository>();
+             services.AddTransient<IProxyStateUpdater, StateUpdater>();
+             services.AddTransient<IWebStateUpdater, StateUpdater>();
+             services.AddTransient<IStateProvider, StateProvider>();
+diff --git a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+index 2515486..2fb62c1 100644
+--- a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
++++ b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+@@ -9,6 +9,7 @@
+   <ItemGroup>
+     <PackageReference Include="LiteDB" Version="4.1.4" />
+     <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="3.0.0" />
++    <PackageReference Include="Microsoft.Extensions.Logging.TraceSource" Version="3.0.0" />
+     <PackageReference Include="NLog.Web.AspNetCore" Version="4.9.0" />
+     <PackageReference Include="NLog" Version="4.6.7" />
+     <PackageReference Include="Serilog.AspNetCore" Version="3.2.0" />
+diff --git a/Src/CommandProxy/Startup.cs b/Src/CommandProxy/Startup.cs
+index 8a232ce..a5cfcae 100644
+--- a/Src/CommandProxy/Startup.cs
++++ b/Src/CommandProxy/Startup.cs
+@@ -36,6 +36,7 @@ namespace PePr.Zbyny.ProxySystem
+         {
+             //services.AddControllers();
+ 
++            services.Configure<StorageOptions>(this.Configuration.GetSection("Repository"));
+             services.Configure<CentralSystemSettings>(this.Configuration.GetSection("CentralSystem"));
+             services.Configure<TimerOptions>(this.Configuration.GetSection("Timers"));
+ 
+@@ -53,8 +54,10 @@ namespace PePr.Zbyny.ProxySystem
+             services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+ 
+             services.AddTransient<IStatePublisher, StatePublisher>();
+-            services.AddTransient<IGoldenStorage, InMemoryStorage>();
+-            services.AddTransient<ISyncStorage, InMemoryStorage>();
++            //services.AddTransient<IGoldenStorage, InMemoryStorage>();
++            //services.AddTransient<ISyncStorage, InMemoryStorage>();
++            services.AddTransient<IGoldenStorage, DbStorage>();
++            services.AddTransient<ISyncStorage, DbStorage>();
+             services.AddTransient<ICentralSystemClient, CentralSystemClient>();
+             services.AddTransient<IRequestProcessor, RequestProcessor>();
+ 
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index c90ae2a..81ccdba 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -10,7 +10,7 @@
+   },
+ 
+   "CentralSystem": {
+-    "BaseAddress": "http://localhost:54492/api/",
++    "BaseAddress": "https://peprremoteheating.azurewebsites.net/api/",
+     "FullUpdateRoute": "proxy/full",
+     "BasicUpdateRoute": "proxy/basic",
+     "PingRoute": "proxy/ping"
+@@ -20,5 +20,9 @@
+     "FullUpdateInterval": 3,
+     "BasicUpdateInterval": 2,
+     "PingInterval": 30
++  },
++
++  "Repository": {
++    "ConnectionString": "proxy.db"
+   }
+ }
+diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
+index 39bf145..bc76e86 100644
+--- a/Src/CommandProxy/appsettings.json
++++ b/Src/CommandProxy/appsettings.json
+@@ -12,7 +12,7 @@
+   "AllowedHosts": "*",
+ 
+   "CentralSystem": {
+-    "BaseAddress": "http://localhost:54492/api/",
++    "BaseAddress": "https://peprremoteheating.azurewebsites.net/api/",
+     "FullUpdateRoute": "proxy/full",
+     "BasicUpdateRoute": "proxy/basic",
+     "PingRoute": "proxy/ping"
+@@ -22,5 +22,9 @@
+     "FullUpdateInterval": -1,
+     "BasicUpdateInterval": -1,
+     "PingInterval": 30
++  },
++
++  "Repository": {
++    "ConnectionString": "proxy.db"
+   }
+ }
+-- 
+2.17.1.windows.2
+
+
+From bcec41a0bd2b263affc29a96daf1c8dff2ad44b1 Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Fri, 3 Jan 2020 15:55:25 +0100
+Subject: [PATCH 4/7] Add NLog support
+
+---
+ .gitignore                                    |  1 +
+ .../RequestResponseLoggingMiddleware.cs       |  4 +-
+ .../PePr.Zbyny.ProxySystem.csproj             |  3 -
+ Src/CommandProxy/Program.cs                   | 14 +----
+ Src/CommandProxy/Startup.cs                   |  5 --
+ Src/CommandProxy/appsettings.Development.json |  6 +-
+ Src/CommandProxy/appsettings.json             |  2 +-
+ Src/CommandProxy/nlog.config                  | 55 +++++++++++++++++++
+ 8 files changed, 64 insertions(+), 26 deletions(-)
+ create mode 100644 Src/CommandProxy/nlog.config
+
+diff --git a/.gitignore b/.gitignore
+index 3e759b7..d0aff36 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -328,3 +328,4 @@ ASALocalRun/
+ 
+ # MFractors (Xamarin productivity tool) working folder 
+ .mfractor/
++/Src/CommandProxy/proxy.db
+diff --git a/Src/CommandProxy/Middlewares/RequestResponseLoggingMiddleware.cs b/Src/CommandProxy/Middlewares/RequestResponseLoggingMiddleware.cs
+index 38935ff..379df63 100644
+--- a/Src/CommandProxy/Middlewares/RequestResponseLoggingMiddleware.cs
++++ b/Src/CommandProxy/Middlewares/RequestResponseLoggingMiddleware.cs
+@@ -45,11 +45,11 @@ namespace PePr.Zbyny.ProxySystem.Middlewares
+ 
+                     if (success)
+                     {
+-                        _logger.LogInformation("{path} {data} {response}", path, data, response);
++                        _logger.LogInformation(new EventId(0, path), "{data} {response}", data, response);
+                     }
+                     else
+                     {
+-                        _logger.LogError("{path} {data} {code}", path, data, code);
++                        _logger.LogError(new EventId(0, path), "{data} {code}", data, code);
+                     }
+ 
+                     await responseBody.CopyToAsync(originalBodyStream);
+diff --git a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+index 2fb62c1..962faec 100644
+--- a/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
++++ b/Src/CommandProxy/PePr.Zbyny.ProxySystem.csproj
+@@ -12,9 +12,6 @@
+     <PackageReference Include="Microsoft.Extensions.Logging.TraceSource" Version="3.0.0" />
+     <PackageReference Include="NLog.Web.AspNetCore" Version="4.9.0" />
+     <PackageReference Include="NLog" Version="4.6.7" />
+-    <PackageReference Include="Serilog.AspNetCore" Version="3.2.0" />
+-    <PackageReference Include="Serilog.Extensions.Logging.File" Version="1.1.0" />
+-    <PackageReference Include="Serilog.Settings.Configuration" Version="3.1.0" />
+   </ItemGroup>
+ 
+   <ItemGroup>
+diff --git a/Src/CommandProxy/Program.cs b/Src/CommandProxy/Program.cs
+index f974c92..3a98703 100644
+--- a/Src/CommandProxy/Program.cs
++++ b/Src/CommandProxy/Program.cs
+@@ -6,8 +6,7 @@ using Microsoft.AspNetCore.Hosting;
+ using Microsoft.Extensions.Configuration;
+ using Microsoft.Extensions.Hosting;
+ using Microsoft.Extensions.Logging;
+-using Serilog;
+-using Serilog.Filters;
++using NLog.Web;
+ 
+ namespace PePr.Zbyny.ProxySystem
+ {
+@@ -15,15 +14,6 @@ namespace PePr.Zbyny.ProxySystem
+     {
+         public static void Main(string[] args)
+         {
+-
+-
+-            //Log.Logger = new LoggerConfiguration()
+-            //    .Filter.ByIncludingOnly((e => e.."EventId.Id = 9")
+-            //    .WriteTo.RollingFile("logs/log-{Date}.txt")
+-            //    .CreateLogger();
+-
+-
+-
+             CreateHostBuilder(args).Build().Run();
+         }
+ 
+@@ -34,7 +24,7 @@ namespace PePr.Zbyny.ProxySystem
+                 {
+                     webBuilder.UseStartup<Startup>();
+                 })
+-                .UseSerilog(); 
++                .UseNLog(); 
+         }
+     }
+ }
+diff --git a/Src/CommandProxy/Startup.cs b/Src/CommandProxy/Startup.cs
+index a5cfcae..9f380c0 100644
+--- a/Src/CommandProxy/Startup.cs
++++ b/Src/CommandProxy/Startup.cs
+@@ -14,7 +14,6 @@ using PePr.Zbyny.ProxySystem.Helpers;
+ using PePr.Zbyny.ProxySystem.Infrastructure;
+ using PePr.Zbyny.ProxySystem.Middlewares;
+ using PePr.Zbyny.ProxySystem.Services;
+-using Serilog;
+ 
+ namespace PePr.Zbyny.ProxySystem
+ {
+@@ -23,10 +22,6 @@ namespace PePr.Zbyny.ProxySystem
+         public Startup(IConfiguration configuration)
+         {
+             Configuration = configuration;
+-
+-            Log.Logger = new LoggerConfiguration().ReadFrom.Configuration(configuration)
+-   // snip ...
+-   .CreateLogger();
+         }
+ 
+         public IConfiguration Configuration { get; }
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index 81ccdba..d90d05e 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -17,9 +17,9 @@
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval": 3,
+-    "BasicUpdateInterval": 2,
+-    "PingInterval": 30
++    "FullUpdateInterval": -1,
++    "BasicUpdateInterval": -1,
++    "PingInterval": -1
+   },
+ 
+   "Repository": {
+diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
+index bc76e86..2790462 100644
+--- a/Src/CommandProxy/appsettings.json
++++ b/Src/CommandProxy/appsettings.json
+@@ -21,7 +21,7 @@
+   "Timers": {
+     "FullUpdateInterval": -1,
+     "BasicUpdateInterval": -1,
+-    "PingInterval": 30
++    "PingInterval": -1
+   },
+ 
+   "Repository": {
+diff --git a/Src/CommandProxy/nlog.config b/Src/CommandProxy/nlog.config
+new file mode 100644
+index 0000000..51bfc7c
+--- /dev/null
++++ b/Src/CommandProxy/nlog.config
+@@ -0,0 +1,55 @@
++﻿<?xml version="1.0" encoding="utf-8" ?>
++<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
++      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++      autoReload="true"
++      internalLogLevel="Info"
++      internalLogFile="c:\temp\internal-nlog.txt">
++
++  <!-- enable asp.net core layout renderers -->
++  <extensions>
++    <add assembly="NLog.Web.AspNetCore"/>
++  </extensions>
++
++  <variable name="RequestResponseLayout" value="${longdate}|${uppercase:${level}}|${event-properties:item=EventId_Name}|${message}"/>
++  <variable name="RequestResponsePath" value="log\unit\${replace:searchFor=/:replaceWith=-:${event-properties:item=EventId_Name}}-${shortdate}.log"/>
++
++  <!-- the targets to write to -->
++  <targets>
++    <!-- write logs to file  -->
++    <target xsi:type="File" name="allfile" fileName="log\nlog-all-${shortdate}.log"
++            layout="${longdate}|${event-properties:item=EventId_Id}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}" />
++
++    <!-- another file log, only own logs. Uses some ASP.NET core renderers -->
++    <target xsi:type="File" name="ownFile-web" fileName="log\nlog-own-${shortdate}.log"
++            layout="${longdate}|${event-properties:item=EventId_Id}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}|url: ${aspnet-request-url}|action: ${aspnet-mvc-action}" />
++
++    <target xsi:type="File" name="unit-query-push" fileName="${RequestResponsePath}" layout="${RequestResponseLayout}" />
++    <target xsi:type="File" name="unit-smartphone-edit" fileName="${RequestResponsePath}" layout="${RequestResponseLayout}" />
++    <target xsi:type="File" name="unit-rest" fileName="${RequestResponsePath}" layout="${RequestResponseLayout}" />
++  </targets>
++
++  <!-- rules to map from logger name to target -->
++  <rules>
++    <logger name="PePr.Zbyny.ProxySystem.Middlewares.RequestResponseLoggingMiddleware" minlevel="Trace" writeTo="unit-smartphone-edit" >
++      <filters defaultAction='Ignore'>
++        <when condition="equals('${event-properties:item=EventId_Name}', 'smarthome/edit')" action="LogFinal" />
++      </filters>
++    </logger>
++
++    <logger name="PePr.Zbyny.ProxySystem.Middlewares.RequestResponseLoggingMiddleware" minlevel="Trace" writeTo="unit-query-push" >
++      <filters defaultAction='Ignore'>
++        <when condition="equals('${event-properties:item=EventId_Name}', 'query/push')" action="LogFinal" />
++      </filters>
++    </logger>
++
++    <logger name="PePr.Zbyny.ProxySystem.Middlewares.RequestResponseLoggingMiddleware" minlevel="Trace" writeTo="unit-rest" final="true"/>
++    
++    <!--All logs, including from Microsoft-->
++    <logger name="*" minlevel="Trace" writeTo="allfile" />
++
++    <!--Skip non-critical Microsoft logs and so log only own logs-->
++    <logger name="Microsoft.*" maxlevel="Info" final="true" />
++    <!-- BlackHole without writeTo -->
++    <logger name="*" minlevel="Trace" writeTo="ownFile-web" />
++  </rules>
++</nlog>
+\ No newline at end of file
+-- 
+2.17.1.windows.2
+
+
+From 3a4c2928a4b3bd819dd610692e7ff64cfcf6e97d Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Fri, 3 Jan 2020 15:56:48 +0100
+Subject: [PATCH 5/7] Create HttPClient using AddHttpClient factory
+
+---
+ .../Infrastructure/CentralSystemClient.cs      | 18 ++++++++++++------
+ Src/CommandProxy/Startup.cs                    |  4 +++-
+ 2 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
+index 9dfbb58..3a87ebb 100644
+--- a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
++++ b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
+@@ -1,4 +1,5 @@
+-﻿using Microsoft.Extensions.Options;
++﻿using Microsoft.Extensions.Logging;
++using Microsoft.Extensions.Options;
+ using PePr.Zbyny.Common.Contracts;
+ using PePr.Zbyny.ProxySystem.Configuration;
+ using PePr.Zbyny.ProxySystem.Helpers;
+@@ -14,11 +15,19 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+ {
+     public class CentralSystemClient : ICentralSystemClient
+     {
++        private HttpClient _httpClient;
++
++        private ILogger<CentralSystemClient> _logger;
++
+         private CentralSystemSettings _settings;
+ 
+-        public CentralSystemClient(IOptions<CentralSystemSettings> options)
++        public CentralSystemClient(HttpClient httpClient, IOptions<CentralSystemSettings> options, ILogger<CentralSystemClient> logger)
+         {
+             _settings = options.Value;
++            _logger = logger;
++
++            _httpClient = httpClient;
++            _httpClient.BaseAddress = new Uri(_settings.BaseAddress); 
+         }
+ 
+         public async Task<UnitUpdate> PushFullUpdateAsync(SyncStateFull state, CancellationToken cancellationToken)
+@@ -54,10 +63,7 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+ 
+         private HttpClient GetClient()
+         {
+-            return new HttpClient()
+-            {
+-                BaseAddress = new Uri(_settings.BaseAddress)
+-            };
++            return _httpClient;
+         }
+ 
+         private static async Task<T> ReadResponseAsync<T>(HttpResponseMessage response)
+diff --git a/Src/CommandProxy/Startup.cs b/Src/CommandProxy/Startup.cs
+index 9f380c0..2cc106b 100644
+--- a/Src/CommandProxy/Startup.cs
++++ b/Src/CommandProxy/Startup.cs
+@@ -53,9 +53,11 @@ namespace PePr.Zbyny.ProxySystem
+             //services.AddTransient<ISyncStorage, InMemoryStorage>();
+             services.AddTransient<IGoldenStorage, DbStorage>();
+             services.AddTransient<ISyncStorage, DbStorage>();
+-            services.AddTransient<ICentralSystemClient, CentralSystemClient>();
++            //services.AddTransient<ICentralSystemClient, CentralSystemClient>();
+             services.AddTransient<IRequestProcessor, RequestProcessor>();
+ 
++            services.AddHttpClient<ICentralSystemClient, CentralSystemClient>();
++
+         }
+ 
+         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+-- 
+2.17.1.windows.2
+
+
+From ccd5ddfeb0fbbe97ceb89f5bdd6179a4ba2147ee Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Fri, 3 Jan 2020 16:16:09 +0100
+Subject: [PATCH 6/7] Update app setings
+
+---
+ .gitignore                                    | 1 +
+ Src/CommandProxy/appsettings.Development.json | 9 +++++----
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index d0aff36..0a45474 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -329,3 +329,4 @@ ASALocalRun/
+ # MFractors (Xamarin productivity tool) working folder 
+ .mfractor/
+ /Src/CommandProxy/proxy.db
++/Src/CentralSystem/data.db
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index d90d05e..5dc92d9 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -10,16 +10,17 @@
+   },
+ 
+   "CentralSystem": {
+-    "BaseAddress": "https://peprremoteheating.azurewebsites.net/api/",
++    "BaseAddress": "http://localhost:54492/api/",
++    "BaseAddressRemote": "https://peprremoteheating.azurewebsites.net/api/",
+     "FullUpdateRoute": "proxy/full",
+     "BasicUpdateRoute": "proxy/basic",
+     "PingRoute": "proxy/ping"
+   },
+ 
+   "Timers": {
+-    "FullUpdateInterval": -1,
+-    "BasicUpdateInterval": -1,
+-    "PingInterval": -1
++    "FullUpdateInterval": 1,
++    "BasicUpdateInterval": 1,
++    "PingInterval": 1
+   },
+ 
+   "Repository": {
+-- 
+2.17.1.windows.2
+
+
+From 085673a0af6f5c8768963eb272e6d48a9e09e801 Mon Sep 17 00:00:00 2001
+From: PePr <petr.prazak@outlook.com>
+Date: Fri, 3 Jan 2020 18:15:43 +0100
+Subject: [PATCH 7/7] Add logging for core services
+
+---
+ .../Responses/Changes/AllRoomsModeChange.cs   |   7 +-
+ .../Responses/Changes/OneRoomModeChange.cs    |   5 +
+ .../Changes/OneRoomTemperatureChange.cs       |   5 +
+ .../Responses/Changes/OneSocketModeChange.cs  |   7 +-
+ Src/CommandProxy/Entities/RoomUpdate.cs       |   5 +
+ Src/CommandProxy/Entities/SocketUpdate.cs     |   5 +
+ .../Infrastructure/CentralSystemClient.cs     |   5 +-
+ .../Infrastructure/StatePublisher.cs          |  21 +-
+ Src/CommandProxy/Services/RequestProcessor.cs | 300 ++++++++++--------
+ .../Services/TimedHostedService.cs            |  12 +
+ Src/CommandProxy/appsettings.Development.json |   4 +-
+ Src/CommandProxy/appsettings.json             |   2 -
+ Src/CommandProxy/nlog.config                  |  20 +-
+ 13 files changed, 246 insertions(+), 152 deletions(-)
+
+diff --git a/Src/CommandProxy/Contracts/Responses/Changes/AllRoomsModeChange.cs b/Src/CommandProxy/Contracts/Responses/Changes/AllRoomsModeChange.cs
+index 933209a..b56a394 100644
+--- a/Src/CommandProxy/Contracts/Responses/Changes/AllRoomsModeChange.cs
++++ b/Src/CommandProxy/Contracts/Responses/Changes/AllRoomsModeChange.cs
+@@ -20,6 +20,11 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+         [JsonProperty("22", Order = 4)]
+         public OperationalMode gv_mode { get; set; }
+ 
+-        
++        public override string ToString()
++        {
++            return $"{this.GetType().Name} - {nameof(DeviceId)}:{DeviceId}|{nameof(Code)}:{Code}|{nameof(gv_mode)}:{gv_mode}|{nameof(nv_mode)}:{nv_mode}";
++        }
++
++
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/Changes/OneRoomModeChange.cs b/Src/CommandProxy/Contracts/Responses/Changes/OneRoomModeChange.cs
+index 344d0c2..9c10874 100644
+--- a/Src/CommandProxy/Contracts/Responses/Changes/OneRoomModeChange.cs
++++ b/Src/CommandProxy/Contracts/Responses/Changes/OneRoomModeChange.cs
+@@ -16,5 +16,10 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+ 
+         [JsonProperty("15", Order = 3)]
+         public OperationalMode nv_mode { get; set; }
++
++        public override string ToString()
++        {
++            return $"{this.GetType().Name} - {nameof(DeviceId)}:{DeviceId}|{nameof(gv_mode)}:{gv_mode}|{nameof(nv_mode)}:{nv_mode}";
++        }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/Changes/OneRoomTemperatureChange.cs b/Src/CommandProxy/Contracts/Responses/Changes/OneRoomTemperatureChange.cs
+index 37457f8..52becf1 100644
+--- a/Src/CommandProxy/Contracts/Responses/Changes/OneRoomTemperatureChange.cs
++++ b/Src/CommandProxy/Contracts/Responses/Changes/OneRoomTemperatureChange.cs
+@@ -19,5 +19,10 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+ 
+         [JsonProperty("15", Order = 3)]
+         public OperationalMode nv_mode { get; set; }
++
++        public override string ToString()
++        {
++            return $"{this.GetType().Name} - {nameof(DeviceId)}:{DeviceId}|{nameof(TemperatureManual)}:{TemperatureManual}|{nameof(gv_mode)}:{gv_mode}|{nameof(nv_mode)}:{nv_mode}";
++        }
+     }
+ }
+diff --git a/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs b/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
+index d49bd2e..3fe2039 100644
+--- a/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
++++ b/Src/CommandProxy/Contracts/Responses/Changes/OneSocketModeChange.cs
+@@ -12,7 +12,7 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+         public string DeviceId { get; set; }
+ 
+         [JsonProperty("19", Order = 2)]
+-        public string on_off { get; set; }
++        public string OnOff { get; set; }
+ 
+         [JsonProperty("15", Order = 3)]
+         public OperationalMode nv_mode { get; set; }
+@@ -20,6 +20,9 @@ namespace PePr.Zbyny.ProxySystem.Contracts.Responses.Changes
+         [JsonProperty("22", Order = 4)]
+         public OperationalMode gv_mode { get; set; }
+ 
+-        
++        public override string ToString()
++        {
++            return $"{this.GetType().Name} - {nameof(DeviceId)}:{DeviceId}|{nameof(OnOff)}:{OnOff}|{nameof(gv_mode)}:{gv_mode}|{nameof(nv_mode)}:{nv_mode}";
++        }
+     }
+ }
+diff --git a/Src/CommandProxy/Entities/RoomUpdate.cs b/Src/CommandProxy/Entities/RoomUpdate.cs
+index 848b5de..fe92a86 100644
+--- a/Src/CommandProxy/Entities/RoomUpdate.cs
++++ b/Src/CommandProxy/Entities/RoomUpdate.cs
+@@ -26,5 +26,10 @@ namespace PePr.Zbyny.ProxySystem.Entities
+                 RequiredTemperature = value.RequiredTemperature
+             };
+         }
++
++        public override string ToString()
++        {
++            return $"{nameof(DeviceId)}:{DeviceId}|{nameof(RequiredMode)}:{RequiredMode}|{nameof(RequiredTemperature)}:{RequiredTemperature}";
++        }
+     }
+ }
+diff --git a/Src/CommandProxy/Entities/SocketUpdate.cs b/Src/CommandProxy/Entities/SocketUpdate.cs
+index 475b98d..ab9e073 100644
+--- a/Src/CommandProxy/Entities/SocketUpdate.cs
++++ b/Src/CommandProxy/Entities/SocketUpdate.cs
+@@ -21,5 +21,10 @@ namespace PePr.Zbyny.ProxySystem.Entities
+                 RequiredMode = ConvertTo.SocketEntity(value.RequiredMode)
+             };
+         }
++
++        public override string ToString()
++        {
++            return $"{nameof(DeviceId)}:{DeviceId}|{nameof(RequiredMode)}:{RequiredMode}";
++        }
+     }
+ }
+diff --git a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
+index 3a87ebb..cda38ef 100644
+--- a/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
++++ b/Src/CommandProxy/Infrastructure/CentralSystemClient.cs
+@@ -17,14 +17,11 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+     {
+         private HttpClient _httpClient;
+ 
+-        private ILogger<CentralSystemClient> _logger;
+-
+         private CentralSystemSettings _settings;
+ 
+-        public CentralSystemClient(HttpClient httpClient, IOptions<CentralSystemSettings> options, ILogger<CentralSystemClient> logger)
++        public CentralSystemClient(HttpClient httpClient, IOptions<CentralSystemSettings> options)
+         {
+             _settings = options.Value;
+-            _logger = logger;
+ 
+             _httpClient = httpClient;
+             _httpClient.BaseAddress = new Uri(_settings.BaseAddress); 
+diff --git a/Src/CommandProxy/Infrastructure/StatePublisher.cs b/Src/CommandProxy/Infrastructure/StatePublisher.cs
+index 28c2c15..806c94a 100644
+--- a/Src/CommandProxy/Infrastructure/StatePublisher.cs
++++ b/Src/CommandProxy/Infrastructure/StatePublisher.cs
+@@ -116,7 +116,7 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+ 
+                 if (pong != null)
+                 {
+-                    switch(pong.Type)
++                    switch (pong.Type)
+                     {
+                         case PongType.Full:
+                             _backgroundQueue.QueueBackgroundWorkItem(ct => this.PublishFullStateAsync(null, ct));
+@@ -131,20 +131,22 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+             }
+             catch (Exception ex)
+             {
+-                _logger.LogError(ex, nameof(PublishBasicStateAsync));
++                _logger.LogError(ex, nameof(PublishPingAsync));
+             }
+         }
+ 
+-
+         private void ProcessUpdateResult(UnitUpdate update)
+         {
+             if (update != null)
+             {
++                _logger.LogInformation("New Update Request");
+                 if (update.Rooms != null)
+                 {
+                     foreach (var roomUpdate in update.Rooms)
+                     {
+-                        _syncStorage.InsertRoomUpdate(RoomUpdateL.Create(roomUpdate));
++                        var r = RoomUpdateL.Create(roomUpdate);
++                        _logger.LogInformation($"Room Update Request: {r}");
++                        _syncStorage.InsertRoomUpdate(r);
+                     }
+                 }
+ 
+@@ -152,11 +154,18 @@ namespace PePr.Zbyny.ProxySystem.Infrastructure
+                 {
+                     foreach (var socketUpdate in update.Sockets)
+                     {
+-                        _syncStorage.InsertSocketUpdate(SocketUpdateL.Create(socketUpdate));
++                        var s = SocketUpdateL.Create(socketUpdate);
++                        _logger.LogInformation($"Socket Update Request: {s}");
++                        _syncStorage.InsertSocketUpdate(s);
+                     }
+                 }
+ 
+-                _syncStorage.SetRequiredMode(ConvertTo.UnitModeEntity(update.RequiredHouseMode));
++                if (update.RequiredHouseMode != null)
++                {
++                    var u = ConvertTo.UnitModeEntity(update.RequiredHouseMode);
++                    _logger.LogInformation($"Unit Update Request: {u}");
++                    _syncStorage.SetRequiredMode(u);
++                }
+             }
+         }
+     }
+diff --git a/Src/CommandProxy/Services/RequestProcessor.cs b/Src/CommandProxy/Services/RequestProcessor.cs
+index 67e7e2c..948d9f6 100644
+--- a/Src/CommandProxy/Services/RequestProcessor.cs
++++ b/Src/CommandProxy/Services/RequestProcessor.cs
+@@ -1,4 +1,5 @@
+-﻿using PePr.Zbyny.ProxySystem.Contracts;
++﻿using Microsoft.Extensions.Logging;
++using PePr.Zbyny.ProxySystem.Contracts;
+ using PePr.Zbyny.ProxySystem.Contracts.Requests;
+ using PePr.Zbyny.ProxySystem.Contracts.Responses;
+ using PePr.Zbyny.ProxySystem.Contracts.Responses.Changes;
+@@ -12,50 +13,64 @@ namespace PePr.Zbyny.ProxySystem.Services
+ {
+     public class RequestProcessor : IRequestProcessor
+     {
++        private ILogger<RequestProcessor> _logger;
++
+         private IGoldenStorage _goldenStorage;
+ 
+         private ISyncStorage _syncStorage;
+ 
+-        public RequestProcessor(IGoldenStorage goldenStorage, ISyncStorage syncStorage)
++        public RequestProcessor(ILogger<RequestProcessor> logger, IGoldenStorage goldenStorage, ISyncStorage syncStorage)
+         {
++            _logger = logger;
++
+             _goldenStorage = goldenStorage;
+             _syncStorage = syncStorage;
+         }
+ 
+         public ResponseBase<ResponseDataBase> ProcessDeviceEditRequest(DeviceEditRequest requestData)
+         {
+-            if (requestData.DeviceId.StartsWith("C", StringComparison.OrdinalIgnoreCase))
++            try
+             {
+-                var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == requestData.DeviceId || r.ZoneId == requestData.ZoneId).FirstOrDefault();
+-
+-                if (room == null)
++                if (requestData.DeviceId.StartsWith("C", StringComparison.OrdinalIgnoreCase))
+                 {
+-                    _goldenStorage.InsertRoom(Room.Create(requestData));
++                    var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == requestData.DeviceId || r.ZoneId == requestData.ZoneId).FirstOrDefault();
++
++                    if (room == null)
++                    {
++                        _goldenStorage.InsertRoom(Room.Create(requestData));
++                    }
++                    else
++                    {
++                        _goldenStorage.UpdateRoom(room.Clone(requestData));
++                    }
+                 }
+-                else
++                else if (requestData.DeviceId.StartsWith("O", StringComparison.OrdinalIgnoreCase))
+                 {
+-                    _goldenStorage.UpdateRoom(room.Clone(requestData));
+-                }
+-            }
+-            else if(requestData.DeviceId.StartsWith("O", StringComparison.OrdinalIgnoreCase))
+-            {
+-                var socket = _goldenStorage.GetSockets().Where(s => s.DeviceId == requestData.DeviceId || s.ZoneId == requestData.ZoneId).FirstOrDefault();
++                    var socket = _goldenStorage.GetSockets().Where(s => s.DeviceId == requestData.DeviceId || s.ZoneId == requestData.ZoneId).FirstOrDefault();
+ 
+-                if (socket == null)
+-                {
+-                    _goldenStorage.InsertSocket(Socket.Create(requestData));
++                    if (socket == null)
++                    {
++                        _goldenStorage.InsertSocket(Socket.Create(requestData));
++                    }
++                    else
++                    {
++                        _goldenStorage.UpdateSocket(socket.Clone(requestData));
++                    }
+                 }
+-                else
++
++                return new ResponseBase<ResponseDataBase>
+                 {
+-                    _goldenStorage.UpdateSocket(socket.Clone(requestData));
+-                }
+-            }
++                    Code = "8",
++                    Data = new ResponseDataBase()
++                };
+ 
+-            return new ResponseBase<ResponseDataBase>
++            }
++            catch (Exception ex)
+             {
+-                Code = "8",
+-                Data = new ResponseDataBase()
+-            };
++                _logger.LogError(ex, nameof(ProcessDeviceEditRequest));
++
++                throw;
++            }
+         }
+ 
+         public ResponseBase<ResponseDataBase> ProcessDeviceEditAllRequest(DeviceEditAllRequest requestData)
+@@ -81,130 +96,157 @@ namespace PePr.Zbyny.ProxySystem.Services
+ 
+         public ResponseBase<object> ProcessQueryCheckRequest(QueryCheckRequest requestData)
+         {
+-            var roomsToUpdate = _syncStorage.GetRoomUpdates();
+-            var socketsToUpdate = _syncStorage.GetSocketUpdates();
+-            
+-            var modeToUpdate = _syncStorage.GetRequiredMode();
++            try
++            {
++                var roomsToUpdate = _syncStorage.GetRoomUpdates();
++                var socketsToUpdate = _syncStorage.GetSocketUpdates();
+ 
+-            var room = roomsToUpdate.FirstOrDefault();
+-            var socket = socketsToUpdate.FirstOrDefault();
++                var modeToUpdate = _syncStorage.GetRequiredMode();
+ 
+-            IChange change = null;
++                var room = roomsToUpdate.FirstOrDefault();
++                var socket = socketsToUpdate.FirstOrDefault();
+ 
+-            //prvne je potreba nastavit vsechny pokoje (jeden po druhem v kazden cyklu), ktere je potraba prestavi
+-            if (room != null)
+-            {
+-                _syncStorage.ResetRoomUpdate(room);
++                IChange change = null;
+ 
+-                if (room.RequiredTemperature.HasValue)
++                //prvne je potreba nastavit vsechny pokoje (jeden po druhem v kazden cyklu), ktere je potraba prestavi
++                if (room != null)
+                 {
+-                    change = new OneRoomTemperatureChange
++                    _logger.LogDebug($"Update for room {room.DeviceId} available");
++                    _syncStorage.ResetRoomUpdate(room);
++
++                    if (room.RequiredTemperature.HasValue)
+                     {
+-                        DeviceId = room.DeviceId,
+-                        TemperatureManual = room.RequiredTemperature.Value.ToString(),
+-                        gv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual),
+-                        nv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual)
+-                    };
++                        change = new OneRoomTemperatureChange
++                        {
++                            DeviceId = room.DeviceId,
++                            TemperatureManual = room.RequiredTemperature.Value.ToString(),
++                            gv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual),
++                            nv_mode = ConvertTo.RoomResponse(room.RequiredMode ?? RoomMode.Manual)
++                        };
++
++                    }
++                    else if (room.RequiredMode.HasValue)
++                    {
++                        change = new OneRoomModeChange
++                        {
++                            DeviceId = room.DeviceId,
++                            gv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value),
++                            nv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value)
++                        };
++                    }
+                 }
+-                else if (room.RequiredMode.HasValue)
++                else if (socket != null)
+                 {
+-                    change = new OneRoomModeChange
++                    _logger.LogDebug($"Update for socket {socket.DeviceId} available");
++
++                    _syncStorage.ResetSocketUpdate(socket);
++
++                    change = new OneSocketModeChange
+                     {
+                         DeviceId = room.DeviceId,
+-                        gv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value),
+-                        nv_mode = ConvertTo.RoomResponse(room.RequiredMode.Value)
++                        OnOff = socket.RequiredMode == SocketMode.On ? "1" : "0",
++                        gv_mode = ConvertTo.SocketResponse(socket.RequiredMode),
++                        nv_mode = ConvertTo.SocketResponse(socket.RequiredMode)
+                     };
+                 }
+-            }
+-            else if (socket != null)
+-            {
+-                _syncStorage.ResetSocketUpdate(socket);
+-
+-                change = new OneSocketModeChange
++                //nakonec to pripadne prepiseme natavenim pro cely dum (predpoklad je, ze cely dum ma vetsi priority) 
++                else if (modeToUpdate != null)
+                 {
+-                    DeviceId = room.DeviceId,
+-                    on_off = socket.RequiredMode == SocketMode.On ? "1" : "0",
+-                    gv_mode = ConvertTo.SocketResponse(socket.RequiredMode),
+-                    nv_mode = ConvertTo.SocketResponse(socket.RequiredMode)
+-                };
+-            }
+-            //nakonec to pripadne prepiseme natavenim pro cely dum (predpoklad je, ze cely dum ma vetsi priority) 
+-            else if (modeToUpdate != null)
+-            {
+-                _syncStorage.ResetRequiredMode();
++                    _logger.LogDebug($"Update for unit available");
++
++                    _syncStorage.ResetRequiredMode();
+ 
+-                change = new AllRoomsModeChange
++                    change = new AllRoomsModeChange
++                    {
++                        DeviceId = "all",
++                        gv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
++                        nv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
++                        Code = DeviceType.Heating
++                    };
++                }
++
++                if (change != null)
+                 {
+-                    DeviceId = "all",
+-                    gv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
+-                    nv_mode = ConvertTo.AllRoomResponse(modeToUpdate.Value),
+-                    Code = DeviceType.Heating
+-                };
+-            }
++                    _logger.LogInformation($"Update available - '{change}'");
+ 
+-            if (change != null)
+-            {
+-                return new ResponseBase<object>
++                    return new ResponseBase<object>
++                    {
++                        Code = "1",
++                        Data = new ResponseChangeMode<IChange>()
++                        {
++                            Context = "1",
++                            Query = change
++                        }
++                    };
++                }
++                else
+                 {
+-                    Code = "1",
+-                    Data = new ResponseChangeMode<IChange>()
++                    return new ResponseBase<object>
+                     {
+-                        Context = "1",
+-                        Query = change
+-                    }
+-                };
++                        Code = "2",
++                        Data = new ResponseDataBase()
++                    };
++                }
+             }
+-            else
++            catch (Exception ex)
+             {
+-                return new ResponseBase<object>
+-                {
+-                    Code = "2",
+-                    Data = new ResponseDataBase()
+-                };
++                _logger.LogError(ex, nameof(ProcessQueryCheckRequest));
++
++                throw;
+             }
+         }
+ 
+         public ResponseBase<ResponseDataBase> ProcessQueryPushRequest(QueryPushRequest requestData)
+         {
+-            var query = requestData.Query;
+-            if (query.DeviceId == "all" && query.Code == DeviceType.Heating)
++            try
+             {
+-                foreach (var room in _goldenStorage.GetRooms())
++                var query = requestData.Query;
++                if (query.DeviceId == "all" && query.Code == DeviceType.Heating)
+                 {
+-                    _goldenStorage.UpdateRoom(room.Clone(query));
++                    foreach (var room in _goldenStorage.GetRooms())
++                    {
++                        _goldenStorage.UpdateRoom(room.Clone(query));
++                    }
+                 }
+-            }
+-            else if (query.DeviceId == "all" && query.Code == DeviceType.Outlet)
+-            {
+-                foreach (var socket in _goldenStorage.GetSockets())
++                else if (query.DeviceId == "all" && query.Code == DeviceType.Outlet)
+                 {
+-                    _goldenStorage.UpdateSocket(socket.Clone(query));
++                    foreach (var socket in _goldenStorage.GetSockets())
++                    {
++                        _goldenStorage.UpdateSocket(socket.Clone(query));
++                    }
+                 }
+-            }
+-            else if (query.DeviceId.StartsWith("C", StringComparison.OrdinalIgnoreCase))
++                else if (query.DeviceId.StartsWith("C", StringComparison.OrdinalIgnoreCase))
+                 {
+-                var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
++                    var room = _goldenStorage.GetRooms().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
+ 
+-                if (room != null)
++                    if (room != null)
++                    {
++                        _goldenStorage.UpdateRoom(room.Clone(query));
++                    }
++                }
++                else if (query.DeviceId.StartsWith("O", StringComparison.OrdinalIgnoreCase))
+                 {
+-                    _goldenStorage.UpdateRoom(room.Clone(query));
++                    var socket = _goldenStorage.GetSockets().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
++
++                    if (socket != null)
++                    {
++                        _goldenStorage.UpdateSocket(socket.Clone(query));
++                    }
+                 }
+-            }
+-            else if (query.DeviceId.StartsWith("O", StringComparison.OrdinalIgnoreCase))
+-            {
+-                var socket = _goldenStorage.GetSockets().Where(r => r.DeviceId == query.DeviceId).FirstOrDefault();
+ 
+-                if (socket != null)
++                return new ResponseBase<ResponseDataBase>
+                 {
+-                    _goldenStorage.UpdateSocket(socket.Clone(query));
+-                }
+-            }
++                    Code = "6",
++                    Data = new ResponseDataBase()
++                };
+ 
+-            return new ResponseBase<ResponseDataBase>
++            }
++            catch (Exception ex)
+             {
+-                Code = "6",
+-                Data = new ResponseDataBase()
+-            };
++                _logger.LogError(ex, nameof(ProcessQueryPushRequest));
++
++                throw;
++            }
+         }
+ 
+         public ResponseBase<ResponseDataBase> ProcessSmarthomeCurrentTimestampRequest()
+@@ -254,25 +296,35 @@ namespace PePr.Zbyny.ProxySystem.Services
+ 
+         public ResponseBase<ResponseDataBase> ProcessZoneEditAllRequest(ZoneEditallRequest requestData)
+         {
+-            var zones = _goldenStorage.GetZones();
+-
+-            foreach (var zone in requestData.Zone)
++            try
+             {
+-                if (zones.Any(z => z.Id == zone.Id) == false)
++                var zones = _goldenStorage.GetZones();
++
++                foreach (var zone in requestData.Zone)
+                 {
+-                    _goldenStorage.InsertZone(Zone.Create(zone));
++                    if (zones.Any(z => z.Id == zone.Id) == false)
++                    {
++                        _goldenStorage.InsertZone(Zone.Create(zone));
++                    }
++                    else
++                    {
++                        _goldenStorage.UpdateZone(Zone.Create(zone));
++                    }
+                 }
+-                else
++
++                return new ResponseBase<ResponseDataBase>
+                 {
+-                    _goldenStorage.UpdateZone(Zone.Create(zone));
+-                }
+-            }
++                    Code = "2",
++                    Data = new ResponseDataBase()
++                };
+ 
+-            return new ResponseBase<ResponseDataBase>
++            }
++            catch (Exception ex)
+             {
+-                Code = "2",
+-                Data = new ResponseDataBase()
+-            };
++                _logger.LogError(ex, nameof(ProcessZoneEditAllRequest));
++
++                throw;
++            }
+         }
+     }
+ }
+diff --git a/Src/CommandProxy/Services/TimedHostedService.cs b/Src/CommandProxy/Services/TimedHostedService.cs
+index 4881162..e0c415f 100644
+--- a/Src/CommandProxy/Services/TimedHostedService.cs
++++ b/Src/CommandProxy/Services/TimedHostedService.cs
+@@ -39,16 +39,22 @@ namespace PePr.Zbyny.ProxySystem.Services
+ 
+             if (_options.FullUpdateInterval > 0)
+             {
++                _logger.LogInformation($"Full update activated - Interval: {_options.FullUpdateInterval} hours.");
++
+                 _fullUpdateTimer = new Timer(OnFullUpdate, null, TimeSpan.Zero, TimeSpan.FromHours(_options.FullUpdateInterval));
+             }
+ 
+             if (_options.BasicUpdateInterval > 0)
+             {
++                _logger.LogInformation($"Basic update activated - Interval: {_options.BasicUpdateInterval} minutes.");
++
+                 _basicUpdateTimer = new Timer(OnBasicUpdate, null, TimeSpan.Zero, TimeSpan.FromMinutes(_options.BasicUpdateInterval));
+             }
+ 
+             if (_options.PingInterval > 0)
+             {
++                _logger.LogInformation($"Ping update activated - Interval: {_options.PingInterval} seconds.");
++
+                 _pingTimer = new Timer(OnPingUpdate, null, TimeSpan.Zero, TimeSpan.FromSeconds(_options.PingInterval));
+             }
+ 
+@@ -57,16 +63,22 @@ namespace PePr.Zbyny.ProxySystem.Services
+ 
+         private void OnFullUpdate(object state)
+         {
++            _logger.LogDebug($"Full update triggered.");
++
+             _backgroundQueue.QueueBackgroundWorkItem(ct => _statePublisher.PublishFullStateAsync(_options.FullUpdateInterval, ct));
+         }
+ 
+         private void OnBasicUpdate(object state)
+         {
++            _logger.LogDebug($"Basic update triggered.");
++
+             _backgroundQueue.QueueBackgroundWorkItem(ct => _statePublisher.PublishBasicStateAsync(_options.BasicUpdateInterval, ct));
+         }
+ 
+         private void OnPingUpdate(object state)
+         {
++            _logger.LogDebug($"Ping update triggered.");
++
+             _backgroundQueue.QueueBackgroundWorkItem(ct => _statePublisher.PublishPingAsync(_options.PingInterval, ct));
+         }
+ 
+diff --git a/Src/CommandProxy/appsettings.Development.json b/Src/CommandProxy/appsettings.Development.json
+index 5dc92d9..12ff5cb 100644
+--- a/Src/CommandProxy/appsettings.Development.json
++++ b/Src/CommandProxy/appsettings.Development.json
+@@ -1,7 +1,5 @@
+ {
+-  "Serilog": {},
+-
+-  "Logging": {
++   "Logging": {
+     "LogLevel": {
+       "Default": "Debug",
+       "System": "Information",
+diff --git a/Src/CommandProxy/appsettings.json b/Src/CommandProxy/appsettings.json
+index 2790462..a828695 100644
+--- a/Src/CommandProxy/appsettings.json
++++ b/Src/CommandProxy/appsettings.json
+@@ -1,6 +1,4 @@
+ {
+-  "Serilog": {},
+-
+   "Logging": {
+     "LogLevel": {
+       "Default": "Information",
+diff --git a/Src/CommandProxy/nlog.config b/Src/CommandProxy/nlog.config
+index 51bfc7c..355767b 100644
+--- a/Src/CommandProxy/nlog.config
++++ b/Src/CommandProxy/nlog.config
+@@ -15,13 +15,11 @@
+ 
+   <!-- the targets to write to -->
+   <targets>
+-    <!-- write logs to file  -->
+-    <target xsi:type="File" name="allfile" fileName="log\nlog-all-${shortdate}.log"
+-            layout="${longdate}|${event-properties:item=EventId_Id}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}" />
++    <target xsi:type="File" name="errors" fileName="log\allErrors-${shortdate}.log"
++            layout="${longdate}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}" />
+ 
+-    <!-- another file log, only own logs. Uses some ASP.NET core renderers -->
+-    <target xsi:type="File" name="ownFile-web" fileName="log\nlog-own-${shortdate}.log"
+-            layout="${longdate}|${event-properties:item=EventId_Id}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}|url: ${aspnet-request-url}|action: ${aspnet-mvc-action}" />
++    <target xsi:type="File" name="loggers" fileName="log\Loggers\${logger}-${shortdate}.log"
++            layout="${longdate}|${uppercase:${level}}|${logger}|${message} ${exception:format=tostring}" />
+ 
+     <target xsi:type="File" name="unit-query-push" fileName="${RequestResponsePath}" layout="${RequestResponseLayout}" />
+     <target xsi:type="File" name="unit-smartphone-edit" fileName="${RequestResponsePath}" layout="${RequestResponseLayout}" />
+@@ -44,12 +42,14 @@
+ 
+     <logger name="PePr.Zbyny.ProxySystem.Middlewares.RequestResponseLoggingMiddleware" minlevel="Trace" writeTo="unit-rest" final="true"/>
+     
+-    <!--All logs, including from Microsoft-->
+-    <logger name="*" minlevel="Trace" writeTo="allfile" />
++    <logger name="*" minlevel="Error" writeTo="errors" />
+ 
+     <!--Skip non-critical Microsoft logs and so log only own logs-->
+     <logger name="Microsoft.*" maxlevel="Info" final="true" />
+-    <!-- BlackHole without writeTo -->
+-    <logger name="*" minlevel="Trace" writeTo="ownFile-web" />
++
++    <logger name="PePr.Zbyny.ProxySystem.Infrastructure.StatePublisher" minlevel="Trace" writeTo="loggers" />
++    <logger name="PePr.Zbyny.ProxySystem.Services.RequestProcessor" minlevel="Trace" writeTo="loggers" />
++    <logger name="PePr.Zbyny.ProxySystem.Services.QueuedHostedService" minlevel="Trace" writeTo="loggers" />
++    <logger name="PePr.Zbyny.ProxySystem.Services.TimedHostedService" minlevel="Information" writeTo="loggers" />
+   </rules>
+ </nlog>
+\ No newline at end of file
+-- 
+2.17.1.windows.2
+
